@@ -1,0 +1,102 @@
+// SPDX-FileCopyrightText: 2026 fila73
+// SPDX-FileContributor: Inspired by Red Salamander
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#ifndef __SHAREPOINT_LANG_RH
+#define __SHAREPOINT_LANG_RH
+
+#define IDD_CFGPAGEACCOUNTS             490
+#define IDD_CFGPAGEGENERAL              490
+#define IDC_CFG_CLIENTID                491
+#define IDC_CFG_ACCOUNT_STATUS          492
+#define IDC_CFG_LOGIN_BTN               493
+#define IDC_CFG_LOGOUT_BTN              494
+#define IDC_CFG_AUTOCONNECT             496
+#define IDC_CFG_RESET_DEFAULT_BTN       497
+#define IDC_CFG_TENANTID                498
+#define IDC_CFG_ACCOUNT_SAVE_BTN        499
+
+#define IDD_AUTH_PROGRESS               500
+#define IDC_AUTH_STATUS_LABEL           501
+#define IDC_AUTH_PROGRESS_BAR           502
+#define IDC_AUTH_BROWSER_MSG            503
+
+#define IDD_CALC_SIZE_PROGRESS          510
+#define IDC_CALC_CURRENT_FOLDER         511
+#define IDC_CALC_DIRS_COUNT             512
+#define IDC_CALC_FILES_COUNT            513
+#define IDC_CALC_TOTAL_SIZE             514
+#define IDC_CALC_PROGRESS_BAR           515
+
+#define IDD_CFGPAGECACHE                520
+#define IDC_CFG_CACHE_ENABLED           521
+#define IDC_CFG_CACHE_INTERVAL_COMBO    522
+#define IDC_CFG_CACHE_CLEAR_BTN         523
+#define IDC_CFG_CACHE_STATUS            524
+#define IDC_CFG_ACCOUNTS_COMBO          525
+#define IDC_CFG_ACCOUNT_ADD_BTN         526
+#define IDC_CFG_ACCOUNT_REMOVE_BTN      527
+#define IDC_CFG_ACCOUNT_SWITCH_BTN      528
+#define IDC_CFG_SMART_CTRL_R            529
+
+#define IDD_TRANSFER_PROGRESS           530
+#define IDC_TRANSFER_ACTION_LABEL       531
+#define IDC_TRANSFER_FILENAME           532
+#define IDC_TRANSFER_PROGRESSBAR        533
+#define IDC_TRANSFER_BYTES              534
+#define IDC_TRANSFER_SPEED              535
+#define IDC_TRANSFER_TOTAL_LABEL        536
+#define IDC_TRANSFER_TOTAL_PROGRESSBAR  537
+#define IDC_TRANSFER_TOTAL_BYTES        538
+#define IDC_TRANSFER_TOTAL_FILES        539
+
+#define IDC_CFG_SANITIZE_INVALID_CHARS  540
+#define IDC_CFG_SANITIZE_CHAR           541
+#define IDC_CFG_DEBUG_LOGGING           543
+
+#define IDD_CFGPAGEDISPLAY              545
+#define IDD_OVERWRITE_CONFLICT          550
+#define IDC_CONFLICT_ICON               551
+#define IDC_CONFLICT_PROMPT             552
+#define IDC_CONFLICT_SRC_INFO           553
+#define IDC_CONFLICT_DST_INFO           554
+#define IDC_CONFLICT_APPLY_ALL          555
+#define IDC_CONFLICT_BTN_OVERWRITE      556
+#define IDC_CONFLICT_BTN_KEEPBOTH       557
+#define IDC_CONFLICT_BTN_SKIP           558
+#define IDC_CONFLICT_DUPLICATES_LABEL   559
+#define IDC_CONFLICT_DUPLICATES_COMBO   560
+
+#define IDD_FIND                        570
+#define IDC_FIND_NAMED                  571
+#define IDC_FIND_LOOKIN                 572
+#define IDC_FIND_LOOKIN_BROWSE          573
+#define IDC_FIND_INCLUDE_SUBDIR         574
+#define IDC_FIND_GREP                   575
+#define IDC_FIND_CONTAINING             576
+#define IDC_FIND_CASE                   577
+#define IDC_FIND_DOCS_OCR               578
+#define IDC_FIND_ADVANCED               579
+#define IDC_FIND_ADVANCED_TEXT          580
+#define IDC_FIND_FOUND_COUNT            581
+#define IDC_FIND_RESULTS                582
+#define IDC_FIND_BTN_FOCUS              583
+#define IDC_FIND_BTN_VIEW               584
+#define IDC_FIND_BTN_OPENWEB            585
+#define IDC_FIND_BTN_COPYLINK           586
+#define IDC_FIND_STATUS                 587
+#define IDC_FIND_BTN_FINDNOW            588
+#define IDC_FIND_BTN_STOP               589
+#define IDC_FIND_LINE1                  590
+#define IDC_FIND_LINE2                  591
+
+#ifdef APSTUDIO_INVOKED
+#ifndef APSTUDIO_READONLY_SYMBOLS
+#define _APS_NEXT_RESOURCE_VALUE        8500
+#define _APS_NEXT_COMMAND_VALUE         40001
+#define _APS_NEXT_CONTROL_VALUE         8700
+#define _APS_NEXT_SYMED_VALUE           101
+#endif
+#endif
+
+#endif // __SHAREPOINT_LANG_RH
