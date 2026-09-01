@@ -52,8 +52,11 @@ Chronologický přehled dokončených prací, implementačních kroků a vyřeš
 - **Řešení**:
   - Vytvořena funkce `AddItemToDir()`, která správně alokuje `file.Name` přes `SalamanderGeneral->DupStr()`, nastavuje atributy, ikony (`pitFromRegistry`), flags `SALDIRFLAG_IGNOREDUPDIRS` a navigační položku `..`.
 
-### 7. Oprava zachování kurzoru/focusu při navigaci nahoru (`cutFileName`)
-- **Problém**: Při přechodu do nadřazeného adresáře (`..` nebo Backspace) skočil kurzor na první položku místo na složku, ze které uživatel vystoupil.
-- **Příčina**: V `CPluginFS::ChangePath` nebyly nastaveny výstupní parametry `cutFileName` a `pathWasCut`.
+### 7. Oprava zachování kurzoru a stability navigace (`CutDirectory` a `ExecuteOnFS`)
+- **Problém**: Při přechodu do nadřazeného adresáře (`..` nebo Backspace) skočil kurzor na první položku, případně došlo k chybě při nestandardním ořezávání cesty.
+- **Příčina**:
+  1. V `ExecuteOnFS` chyběl parametr `suggestedFocusName` u `ChangePanelPathToPluginFS`.
+  2. Ruční manipulace se stringy cest (`substr`/`rfind`) nebyla plně kompatibilní s interními normami Salamanderu.
 - **Řešení**:
-  - V `ChangePath` se při přechodu z hlubší cesty do nadřazené vypočte název opouštěné složky a předá se do `cutFileName` spolu s `*pathWasCut = TRUE`. Salamander na ni automaticky nastaví kurzor.
+  - `ExecuteOnFS` a `GetFullName` sjednoceny na standardní SDK funkci `SalamanderGeneral->CutDirectory()`, která zkracuje cestu a vrací ukazatel na odříznutou podsložku (`cutDir`).
+  - Tento název se předává do `ChangePanelPathToPluginFS(panel, pluginFSName, newPath, NULL, -1, cutDir)` – Salamander na ni automaticky a stabilně nastaví kurzor.
