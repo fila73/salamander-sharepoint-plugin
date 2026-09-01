@@ -487,11 +487,27 @@ bool AuthManager::LaunchInteractiveAuth(HWND hParent, std::string* errorOut)
             SOCKET clientSock = accept(listenSock, NULL, NULL);
             if (clientSock != INVALID_SOCKET)
             {
-                char reqBuf[4096] = {0};
-                int bytesRead = recv(clientSock, reqBuf, sizeof(reqBuf) - 1, 0);
-                if (bytesRead > 0)
+                // Set client socket to blocking with a 5 second timeout
+                u_long clientNonBlocking = 0;
+                ioctlsocket(clientSock, FIONBIO, &clientNonBlocking);
+                DWORD rcvTimeout = 5000;
+                setsockopt(clientSock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&rcvTimeout, sizeof(rcvTimeout));
+
+                std::string req;
+                char reqBuf[4096];
+                while (true)
                 {
-                    std::string req(reqBuf, bytesRead);
+                    int bytesRead = recv(clientSock, reqBuf, sizeof(reqBuf), 0);
+                    if (bytesRead <= 0) break;
+                    req.append(reqBuf, bytesRead);
+                    if (req.find("\r\n\r\n") != std::string::npos || req.find("\n\n") != std::string::npos)
+                        break;
+                    if (req.length() > 65536)
+                        break;
+                }
+
+                if (!req.empty())
+                {
                     size_t qmark = req.find('?');
                     size_t endPos = req.find(" HTTP/", qmark != std::string::npos ? qmark : 0);
 
@@ -522,9 +538,9 @@ bool AuthManager::LaunchInteractiveAuth(HWND hParent, std::string* errorOut)
 
                     // Send response HTML back to browser
                     std::string htmlBody =
-                        "<html><head><title>Open Salamander SharePoint Plugin</title>"
+                        "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Open Salamander - SharePoint</title>"
                         "<style>body{font-family:Segoe UI,sans-serif;background:#1e1e1e;color:#fff;text-align:center;padding-top:60px;}"
-                        "h1{color:#00a4ef;}.box{background:#2d2d2d;display:inline-block;padding:30px 50px;border-radius:8px;}</style></head>"
+                        "h1{color:#00a4ef;}.box{background:#2d2d2d;display:inline-block;padding:30px 50px;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.5);}</style></head>"
                         "<body><div class='box'><h1>Prihlaseni uspesne! / Sign-in successful!</h1>"
                         "<p>Muzete zavrit toto okno a vratit se do Open Salamandera.<br>"
                         "You can close this tab and return to Open Salamander.</p></div></body></html>";
@@ -536,6 +552,7 @@ bool AuthManager::LaunchInteractiveAuth(HWND hParent, std::string* errorOut)
 
                     send(clientSock, resp.c_str(), (int)resp.length(), 0);
                 }
+                shutdown(clientSock, SD_BOTH);
                 closesocket(clientSock);
             }
         }
