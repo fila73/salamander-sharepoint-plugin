@@ -11,24 +11,12 @@
 #include "sharepoint_log.h"
 #include "dialogs.h"
 
-#define SHAREPOINT_COL_AUTHOR_ID       1
-#define SHAREPOINT_COL_MODIFIED_BY_ID  2
-#define SHAREPOINT_COL_SHARED_ID       3
-#define SHAREPOINT_COL_WEBURL_ID       4
+static std::map<std::string, std::string> s_pathToIdMap;
+static std::map<std::string, std::string> s_pathToDriveMap;
+static std::map<std::string, std::string> s_pathToSiteMap;
+static std::mutex s_pathMapMutex;
 
-static DWORD s_authorWidth = MAKELONG(130, 130);
-static DWORD s_authorFixedWidth = MAKELONG(0, 0);
-
-static DWORD s_modifiedByWidth = MAKELONG(130, 130);
-static DWORD s_modifiedByFixedWidth = MAKELONG(0, 0);
-
-static DWORD s_sharedWidth = MAKELONG(60, 60);
-static DWORD s_sharedFixedWidth = MAKELONG(0, 0);
-
-static DWORD s_webUrlWidth = MAKELONG(180, 180);
-static DWORD s_webUrlFixedWidth = MAKELONG(0, 0);
-
-// Global transfer variables provided by Salamander
+// Transfer variables for custom columns
 static const CFileData** s_transferFileData = NULL;
 static int* s_transferIsDir = NULL;
 static char* s_transferBuffer = NULL;
@@ -37,10 +25,19 @@ static DWORD* s_transferRowData = NULL;
 static CPluginDataInterfaceAbstract** s_transferPluginDataIface = NULL;
 static DWORD* s_transferActCustomData = NULL;
 
-static std::map<std::string, std::string> s_pathToIdMap;
-static std::map<std::string, std::string> s_pathToDriveMap;
-static std::map<std::string, std::string> s_pathToSiteMap;
-static std::mutex s_pathMapMutex;
+static DWORD s_authorWidth = MAKELONG(140, 140);
+static DWORD s_authorFixedWidth = MAKELONG(0, 0);
+static DWORD s_modifiedByWidth = MAKELONG(140, 140);
+static DWORD s_modifiedByFixedWidth = MAKELONG(0, 0);
+static DWORD s_sharedWidth = MAKELONG(60, 60);
+static DWORD s_sharedFixedWidth = MAKELONG(0, 0);
+static DWORD s_webUrlWidth = MAKELONG(200, 200);
+static DWORD s_webUrlFixedWidth = MAKELONG(0, 0);
+
+#define SHAREPOINT_COL_AUTHOR_ID 1
+#define SHAREPOINT_COL_MODIFIED_BY_ID 2
+#define SHAREPOINT_COL_SHARED_ID 3
+#define SHAREPOINT_COL_WEBURL_ID 4
 
 struct SharePointPluginData
 {
@@ -184,25 +181,25 @@ void WINAPI CSharePointPluginDataInterface::SetupView(BOOL leftPanel, CSalamande
         colShared.GetText = GetSharedColumnText;
         colShared.CustomData = SHAREPOINT_COL_SHARED_ID;
         colShared.SupportSorting = 1;
-        colShared.LeftAlignment = 0;
+        colShared.LeftAlignment = 1;
         colShared.ID = COLUMN_ID_CUSTOM;
         colShared.Width = leftPanel ? LOWORD(s_sharedWidth) : HIWORD(s_sharedWidth);
         colShared.FixedWidth = leftPanel ? LOWORD(s_sharedFixedWidth) : HIWORD(s_sharedFixedWidth);
         view->InsertColumn(count++, &colShared);
 
         // Web URL column
-        CColumn colWeb;
-        memset(&colWeb, 0, sizeof(colWeb));
-        lstrcpynA(colWeb.Name, LoadStr(IDS_COL_WEBURL), sizeof(colWeb.Name));
-        lstrcpynA(colWeb.Description, LoadStr(IDS_COL_WEBURL_DESC), sizeof(colWeb.Description));
-        colWeb.GetText = GetWebUrlColumnText;
-        colWeb.CustomData = SHAREPOINT_COL_WEBURL_ID;
-        colWeb.SupportSorting = 1;
-        colWeb.LeftAlignment = 1;
-        colWeb.ID = COLUMN_ID_CUSTOM;
-        colWeb.Width = leftPanel ? LOWORD(s_webUrlWidth) : HIWORD(s_webUrlWidth);
-        colWeb.FixedWidth = leftPanel ? LOWORD(s_webUrlFixedWidth) : HIWORD(s_webUrlFixedWidth);
-        view->InsertColumn(count++, &colWeb);
+        CColumn colWebUrl;
+        memset(&colWebUrl, 0, sizeof(colWebUrl));
+        lstrcpynA(colWebUrl.Name, LoadStr(IDS_COL_WEBURL), sizeof(colWebUrl.Name));
+        lstrcpynA(colWebUrl.Description, LoadStr(IDS_COL_WEBURL_DESC), sizeof(colWebUrl.Description));
+        colWebUrl.GetText = GetWebUrlColumnText;
+        colWebUrl.CustomData = SHAREPOINT_COL_WEBURL_ID;
+        colWebUrl.SupportSorting = 1;
+        colWebUrl.LeftAlignment = 1;
+        colWebUrl.ID = COLUMN_ID_CUSTOM;
+        colWebUrl.Width = leftPanel ? LOWORD(s_webUrlWidth) : HIWORD(s_webUrlWidth);
+        colWebUrl.FixedWidth = leftPanel ? LOWORD(s_webUrlFixedWidth) : HIWORD(s_webUrlFixedWidth);
+        view->InsertColumn(count++, &colWebUrl);
     }
 }
 
@@ -253,6 +250,76 @@ void WINAPI CSharePointPluginDataInterface::ColumnWidthWasChanged(BOOL leftPanel
         case SHAREPOINT_COL_SHARED_ID: s_sharedWidth = MAKELONG(LOWORD(s_sharedWidth), newWidth); break;
         case SHAREPOINT_COL_WEBURL_ID: s_webUrlWidth = MAKELONG(LOWORD(s_webUrlWidth), newWidth); break;
         }
+    }
+}
+
+static void AddItemToDir(CSalamanderDirectoryAbstract* dir, const char* name,
+                         bool isDir, int64_t size, bool sizeValid, const FILETIME* ft,
+                         CPluginDataInterfaceAbstract* pluginData,
+                         const SharePointApi::SharePointItem* item = nullptr)
+{
+    if (!dir || !name) return;
+
+    std::string ansiName;
+    if (strcmp(name, "..") == 0 || strcmp(name, ".") == 0)
+    {
+        ansiName = name;
+    }
+    else
+    {
+        ansiName = SharePointHttp::HttpClient::Utf8ToAnsi(name);
+    }
+
+    CFileData file{};
+    file.Name = SalamanderGeneral->DupStr(ansiName.c_str());
+    if (!file.Name) return;
+
+    file.NameLen = (int)strlen(file.Name);
+
+    int sortByExtDirsAsFiles = 0;
+    SalamanderGeneral->GetConfigParameter(SALCFG_SORTBYEXTDIRSASFILES, &sortByExtDirsAsFiles,
+                                          sizeof(sortByExtDirsAsFiles), NULL);
+
+    if (!sortByExtDirsAsFiles && isDir)
+        file.Ext = file.Name + file.NameLen;
+    else
+    {
+        const char* pDot = strrchr(file.Name, '.');
+        file.Ext = (pDot != NULL) ? const_cast<char*>(pDot + 1) : file.Name + file.NameLen;
+    }
+
+    file.Size.SetUI64((unsigned __int64)(size < 0 ? 0 : size));
+    if (sizeValid)
+    {
+        file.SizeValid = 1;
+    }
+    if (ft) file.LastWrite = *ft;
+    file.Attr = isDir ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
+    file.DosName = NULL;
+    file.PluginData = 0;
+
+    if (item)
+    {
+        SharePointPluginData* pd = new SharePointPluginData();
+        pd->id = item->id;
+        pd->driveId = item->driveId;
+        pd->siteId = item->siteId;
+        pd->authorName = item->authorName;
+        pd->lastModifyingUserName = item->lastModifyingUserName;
+        pd->webUrl = item->webUrl;
+        pd->isShared = item->isShared;
+        file.PluginData = reinterpret_cast<DWORD_PTR>(pd);
+    }
+
+    file.IconOverlayIndex = ICONOVERLAYINDEX_NOTUSED;
+
+    if (isDir)
+    {
+        dir->AddDir(NULL, file, pluginData);
+    }
+    else
+    {
+        dir->AddFile(NULL, file, pluginData);
     }
 }
 
@@ -349,10 +416,12 @@ BOOL WINAPI CPluginFS::ChangePath(int currentFSNameIndex, char* fsName, int fsNa
                                   const char* userPart, char* cutFileName, BOOL* pathWasCut,
                                   BOOL forceRefresh, int mode)
 {
+    if (pathWasCut) *pathWasCut = FALSE;
+
     std::string target = (userPart && *userPart) ? userPart : "\\";
     if (target.empty() || target[0] != '\\') target = "\\" + target;
 
-    if (target.length() > 1 && target.back() == '\\') target.pop_back();
+    while (target.length() > 1 && target.back() == '\\') target.pop_back();
 
     m_currentPath = target;
     return TRUE;
@@ -395,22 +464,39 @@ BOOL WINAPI CPluginFS::ListCurrentPath(CSalamanderDirectoryAbstract* dir,
                                        int& iconsType, BOOL forceRefresh)
 {
     if (!dir) return FALSE;
-    pluginData = &s_pluginDataInterface;
-    iconsType = 0; // standard extension icons
 
+    iconsType = pitFromRegistry;
+    pluginData = &s_pluginDataInterface;
     m_currentItems.clear();
+
+    dir->SetFlags(SALDIRFLAG_IGNOREDUPDIRS);
+    dir->SetValidData(VALID_DATA_EXTENSION | VALID_DATA_SIZE | VALID_DATA_TYPE |
+                      VALID_DATA_DATE | VALID_DATA_TIME | VALID_DATA_ATTRIBUTES);
+
+    // Add up-directory if not at root
+    if (!m_currentPath.empty() && m_currentPath != "\\" && _stricmp(m_currentPath.c_str(), "\\") != 0)
+    {
+        FILETIME ft = {0, 0};
+        GetSystemTimeAsFileTime(&ft);
+        AddItemToDir(dir, "..", true, 0, false, &ft, pluginData);
+    }
+
     auto& cache = SharePointCache::CacheManager::GetInstance();
     auto& api = SharePointApi::ApiClient::GetInstance();
 
     std::string cur = m_currentPath;
     if (cur.empty() || cur == "\\")
     {
+        FILETIME ft = {0, 0};
+        GetSystemTimeAsFileTime(&ft);
+
         SharePointApi::SharePointItem oneDrive;
         oneDrive.id = "onedrive_root";
         oneDrive.name = kOneDriveDir;
         oneDrive.isFolder = true;
         oneDrive.isOneDrive = true;
         m_currentItems.push_back(oneDrive);
+        AddItemToDir(dir, kOneDriveDir, true, 0, false, &ft, pluginData, &oneDrive);
 
         SharePointApi::SharePointItem sites;
         sites.id = "sites_root";
@@ -418,6 +504,7 @@ BOOL WINAPI CPluginFS::ListCurrentPath(CSalamanderDirectoryAbstract* dir,
         sites.isFolder = true;
         sites.isSite = true;
         m_currentItems.push_back(sites);
+        AddItemToDir(dir, kSitesDir, true, 0, false, &ft, pluginData, &sites);
 
         SharePointApi::SharePointItem sharedWithMe;
         sharedWithMe.id = "shared_with_me";
@@ -425,12 +512,14 @@ BOOL WINAPI CPluginFS::ListCurrentPath(CSalamanderDirectoryAbstract* dir,
         sharedWithMe.isFolder = true;
         sharedWithMe.isShared = true;
         m_currentItems.push_back(sharedWithMe);
+        AddItemToDir(dir, kSharedWithMeDir, true, 0, false, &ft, pluginData, &sharedWithMe);
 
         SharePointApi::SharePointItem recent;
         recent.id = "recent";
         recent.name = kRecentDir;
         recent.isFolder = true;
         m_currentItems.push_back(recent);
+        AddItemToDir(dir, kRecentDir, true, 0, false, &ft, pluginData, &recent);
 
         SharePointApi::SharePointItem trash;
         trash.id = "trash";
@@ -438,6 +527,9 @@ BOOL WINAPI CPluginFS::ListCurrentPath(CSalamanderDirectoryAbstract* dir,
         trash.isFolder = true;
         trash.isTrashed = true;
         m_currentItems.push_back(trash);
+        AddItemToDir(dir, kTrashDir, true, 0, false, &ft, pluginData, &trash);
+
+        return TRUE;
     }
     else if (_stricmp(cur.c_str(), "\\Sites") == 0)
     {
@@ -599,38 +691,7 @@ BOOL WINAPI CPluginFS::ListCurrentPath(CSalamanderDirectoryAbstract* dir,
 
     for (const auto& item : m_currentItems)
     {
-        CFileData file;
-        file.Name = const_cast<char*>(item.name.c_str());
-        file.NameLen = (int)item.name.length();
-
-        const char* pDot = strrchr(file.Name, '.');
-        file.Ext = (pDot != NULL && !item.isFolder) ? const_cast<char*>(pDot + 1) : file.Name + file.NameLen;
-
-        file.Size.SetUI64((unsigned __int64)(item.size < 0 ? 0 : item.size));
-        file.SizeValid = item.isFolder ? 0 : 1;
-        file.LastWrite = item.modifiedTime;
-        file.Attr = item.isFolder ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
-        file.DosName = NULL;
-
-        SharePointPluginData* pd = new SharePointPluginData();
-        pd->id = item.id;
-        pd->driveId = item.driveId;
-        pd->siteId = item.siteId;
-        pd->authorName = item.authorName;
-        pd->lastModifyingUserName = item.lastModifyingUserName;
-        pd->webUrl = item.webUrl;
-        pd->isShared = item.isShared;
-        file.PluginData = reinterpret_cast<DWORD_PTR>(pd);
-        file.IconOverlayIndex = ICONOVERLAYINDEX_NOTUSED;
-
-        if (item.isFolder)
-        {
-            dir->AddDir(NULL, file, pluginData);
-        }
-        else
-        {
-            dir->AddFile(NULL, file, pluginData);
-        }
+        AddItemToDir(dir, item.name.c_str(), item.isFolder, item.size, !item.isFolder, &item.modifiedTime, pluginData, &item);
     }
 
     return TRUE;
