@@ -268,18 +268,33 @@ void WINAPI CPluginInterfaceForFS::ExecuteOnFS(int panel, CPluginFSInterfaceAbst
         {
             std::string curPath = fs->GetCurrentPathStr();
             std::string parentPath = "\\";
+            std::string focusName;
+
             size_t slashPos = curPath.rfind('\\');
             if (slashPos != std::string::npos && slashPos > 0)
             {
                 parentPath = curPath.substr(0, slashPos);
+                focusName = curPath.substr(slashPos + 1);
             }
-            SalamanderGeneral->ChangePanelPathToPluginFS(panel, pluginFSName, parentPath.c_str());
+            else if (!curPath.empty() && curPath != "\\")
+            {
+                parentPath = "\\";
+                focusName = (curPath[0] == '\\') ? curPath.substr(1) : curPath;
+            }
+
+            std::string ansiFocus = SharePointHttp::HttpClient::Utf8ToAnsi(focusName);
+
+            fs = NULL; // pointer might become invalid after ChangePanelPath
+            SalamanderGeneral->ChangePanelPathToPluginFS(panel, pluginFSName, parentPath.c_str(), NULL,
+                                                         -1, ansiFocus.empty() ? NULL : ansiFocus.c_str());
         }
         else // subdirectory
         {
             std::string curPath = fs->GetCurrentPathStr();
             if (curPath.empty() || curPath.back() != '\\') curPath += "\\";
             curPath += (file.Name ? file.Name : "");
+
+            fs = NULL;
             SalamanderGeneral->ChangePanelPathToPluginFS(panel, pluginFSName, curPath.c_str());
         }
     }
