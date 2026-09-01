@@ -403,43 +403,66 @@ bool AuthManager::LaunchInteractiveAuth(HWND hParent, std::string* errorOut)
         return false;
     }
 
-    SOCKET listenSock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (listenSock == INVALID_SOCKET)
+    // Create IPv4 loopback socket
+    SOCKET listenSock4 = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (listenSock4 == INVALID_SOCKET)
     {
         WSACleanup();
-        if (errorOut) *errorOut = "Failed to create local listener socket";
+        if (errorOut) *errorOut = "Failed to create IPv4 listener socket";
         return false;
     }
 
-    sockaddr_in serverAddr{};
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    serverAddr.sin_port = 0; // auto assign port
+    sockaddr_in serverAddr4{};
+    serverAddr4.sin_family = AF_INET;
+    serverAddr4.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    serverAddr4.sin_port = 0; // auto assign port
 
-    if (bind(listenSock, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR)
+    if (bind(listenSock4, (sockaddr*)&serverAddr4, sizeof(serverAddr4)) == SOCKET_ERROR)
     {
-        closesocket(listenSock);
+        closesocket(listenSock4);
         WSACleanup();
-        if (errorOut) *errorOut = "Failed to bind local loopback port";
+        if (errorOut) *errorOut = "Failed to bind IPv4 loopback port";
         return false;
     }
 
-    sockaddr_in boundAddr{};
-    int boundAddrLen = sizeof(boundAddr);
-    getsockname(listenSock, (sockaddr*)&boundAddr, &boundAddrLen);
-    int port = ntohs(boundAddr.sin_port);
+    sockaddr_in boundAddr4{};
+    int boundAddrLen4 = sizeof(boundAddr4);
+    getsockname(listenSock4, (sockaddr*)&boundAddr4, &boundAddrLen4);
+    int port = ntohs(boundAddr4.sin_port);
 
-    if (listen(listenSock, 1) == SOCKET_ERROR)
+    if (listen(listenSock4, 5) == SOCKET_ERROR)
     {
-        closesocket(listenSock);
+        closesocket(listenSock4);
         WSACleanup();
-        if (errorOut) *errorOut = "Failed to listen on local loopback port";
+        if (errorOut) *errorOut = "Failed to listen on IPv4 loopback port";
         return false;
     }
 
-    // Set socket non-blocking for timeout handling
+    // Also bind IPv6 loopback socket on the SAME port (for browsers resolving localhost -> ::1)
+    SOCKET listenSock6 = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+    if (listenSock6 != INVALID_SOCKET)
+    {
+        DWORD v6only = 1;
+        setsockopt(listenSock6, IPPROTO_IPV6, IPV6_V6ONLY, (const char*)&v6only, sizeof(v6only));
+        sockaddr_in6 serverAddr6{};
+        serverAddr6.sin6_family = AF_INET6;
+        serverAddr6.sin6_addr = in6addr_loopback;
+        serverAddr6.sin6_port = htons(port);
+        if (bind(listenSock6, (sockaddr*)&serverAddr6, sizeof(serverAddr6)) == SOCKET_ERROR ||
+            listen(listenSock6, 5) == SOCKET_ERROR)
+        {
+            closesocket(listenSock6);
+            listenSock6 = INVALID_SOCKET;
+        }
+    }
+
+    // Set sockets non-blocking for select() timeout handling
     u_long nonBlocking = 1;
-    ioctlsocket(listenSock, FIONBIO, &nonBlocking);
+    ioctlsocket(listenSock4, FIONBIO, &nonBlocking);
+    if (listenSock6 != INVALID_SOCKET)
+    {
+        ioctlsocket(listenSock6, FIONBIO, &nonBlocking);
+    }
 
     std::string codeVerifier = GenerateRandomString(64);
     std::string codeChallenge = ComputePkceChallenge(codeVerifier);
@@ -457,6 +480,7 @@ bool AuthManager::LaunchInteractiveAuth(HWND hParent, std::string* errorOut)
                           "&code_challenge_method=S256" +
                           "&prompt=select_account";
 
+    SharePointLog::Log("OAuth: Launching browser on port %d", port);
     ShellExecuteA(NULL, "open", authUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
 
     std::string authCode;
@@ -467,7 +491,7 @@ bool AuthManager::LaunchInteractiveAuth(HWND hParent, std::string* errorOut)
     {
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::steady_clock::now() - startTime).count();
-        if (elapsed > 120) // 2 minutes timeout
+        if (elapsed > 180) // 3 minutes timeout
         {
             if (errorOut) *errorOut = "Authentication timed out. Browser authorization was not completed.";
             break;
@@ -475,85 +499,99 @@ bool AuthManager::LaunchInteractiveAuth(HWND hParent, std::string* errorOut)
 
         fd_set readSet;
         FD_ZERO(&readSet);
-        FD_SET(listenSock, &readSet);
+        FD_SET(listenSock4, &readSet);
+        if (listenSock6 != INVALID_SOCKET)
+        {
+            FD_SET(listenSock6, &readSet);
+        }
 
         timeval tv{};
         tv.tv_sec = 0;
         tv.tv_usec = 200000; // 200ms
 
         int sel = select(0, &readSet, NULL, NULL, &tv);
-        if (sel > 0 && FD_ISSET(listenSock, &readSet))
+        if (sel > 0)
         {
-            SOCKET clientSock = accept(listenSock, NULL, NULL);
-            if (clientSock != INVALID_SOCKET)
+            SOCKET readySock = INVALID_SOCKET;
+            if (FD_ISSET(listenSock4, &readSet)) readySock = listenSock4;
+            else if (listenSock6 != INVALID_SOCKET && FD_ISSET(listenSock6, &readSet)) readySock = listenSock6;
+
+            if (readySock != INVALID_SOCKET)
             {
-                // Set client socket to blocking with a 5 second timeout
-                u_long clientNonBlocking = 0;
-                ioctlsocket(clientSock, FIONBIO, &clientNonBlocking);
-                DWORD rcvTimeout = 5000;
-                setsockopt(clientSock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&rcvTimeout, sizeof(rcvTimeout));
-
-                std::string req;
-                char reqBuf[4096];
-                while (true)
+                SOCKET clientSock = accept(readySock, NULL, NULL);
+                if (clientSock != INVALID_SOCKET)
                 {
-                    int bytesRead = recv(clientSock, reqBuf, sizeof(reqBuf), 0);
-                    if (bytesRead <= 0) break;
-                    req.append(reqBuf, bytesRead);
-                    if (req.find("\r\n\r\n") != std::string::npos || req.find("\n\n") != std::string::npos)
-                        break;
-                    if (req.length() > 65536)
-                        break;
-                }
+                    // Set client socket to blocking with a 5 second timeout
+                    u_long clientNonBlocking = 0;
+                    ioctlsocket(clientSock, FIONBIO, &clientNonBlocking);
+                    DWORD rcvTimeout = 5000;
+                    setsockopt(clientSock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&rcvTimeout, sizeof(rcvTimeout));
 
-                if (!req.empty())
-                {
-                    size_t qmark = req.find('?');
-                    size_t endPos = req.find(" HTTP/", qmark != std::string::npos ? qmark : 0);
-
-                    if (qmark != std::string::npos && endPos != std::string::npos && endPos > qmark)
+                    std::string req;
+                    char reqBuf[4096];
+                    while (true)
                     {
-                        std::string query = req.substr(qmark + 1, endPos - (qmark + 1));
-                        std::stringstream ss(query);
-                        std::string param;
-                        std::string recvState;
+                        int bytesRead = recv(clientSock, reqBuf, sizeof(reqBuf), 0);
+                        if (bytesRead <= 0) break;
+                        req.append(reqBuf, bytesRead);
+                        if (req.find("\r\n\r\n") != std::string::npos || req.find("\n\n") != std::string::npos)
+                            break;
+                        if (req.length() > 65536)
+                            break;
+                    }
 
-                        while (std::getline(ss, param, '&'))
+                    SharePointLog::Log("OAuth: Received HTTP request (%u bytes)", (unsigned int)req.length());
+
+                    if (!req.empty())
+                    {
+                        size_t qmark = req.find('?');
+                        size_t endPos = req.find(" HTTP/", qmark != std::string::npos ? qmark : 0);
+
+                        if (qmark != std::string::npos && endPos != std::string::npos && endPos > qmark)
                         {
-                            size_t eq = param.find('=');
-                            if (eq != std::string::npos)
+                            std::string query = req.substr(qmark + 1, endPos - (qmark + 1));
+                            std::stringstream ss(query);
+                            std::string param;
+                            std::string recvState;
+
+                            while (std::getline(ss, param, '&'))
                             {
-                                std::string key = param.substr(0, eq);
-                                std::string val = UrlDecode(param.substr(eq + 1));
-                                if (key == "code") authCode = val;
-                                else if (key == "state") recvState = val;
+                                size_t eq = param.find('=');
+                                if (eq != std::string::npos)
+                                {
+                                    std::string key = param.substr(0, eq);
+                                    std::string val = UrlDecode(param.substr(eq + 1));
+                                    if (key == "code") authCode = val;
+                                    else if (key == "state") recvState = val;
+                                }
+                            }
+
+                            if (!authCode.empty() && recvState == state)
+                            {
+                                received = true;
+                                SharePointLog::Log("OAuth: Authorization code successfully captured!");
                             }
                         }
 
-                        if (!authCode.empty() && recvState == state)
-                        {
-                            received = true;
-                        }
+                        // Send response HTML back to browser
+                        std::string htmlBody =
+                            "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Open Salamander - SharePoint</title>"
+                            "<style>body{font-family:Segoe UI,sans-serif;background:#1e1e1e;color:#fff;text-align:center;padding-top:60px;}"
+                            "h1{color:#00a4ef;}.box{background:#2d2d2d;display:inline-block;padding:30px 50px;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.5);}</style></head>"
+                            "<body><div class='box'><h1>Prihlaseni uspesne! / Sign-in successful!</h1>"
+                            "<p>Muzete zavrit toto okno a vratit se do Open Salamandera.<br>"
+                            "You can close this tab and return to Open Salamander.</p></div></body></html>";
+
+                        std::string resp = "HTTP/1.1 200 OK\r\n"
+                                           "Content-Type: text/html; charset=utf-8\r\n"
+                                           "Content-Length: " + std::to_string(htmlBody.length()) + "\r\n"
+                                           "Connection: close\r\n\r\n" + htmlBody;
+
+                        send(clientSock, resp.c_str(), (int)resp.length(), 0);
                     }
-
-                    // Send response HTML back to browser
-                    std::string htmlBody =
-                        "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Open Salamander - SharePoint</title>"
-                        "<style>body{font-family:Segoe UI,sans-serif;background:#1e1e1e;color:#fff;text-align:center;padding-top:60px;}"
-                        "h1{color:#00a4ef;}.box{background:#2d2d2d;display:inline-block;padding:30px 50px;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.5);}</style></head>"
-                        "<body><div class='box'><h1>Prihlaseni uspesne! / Sign-in successful!</h1>"
-                        "<p>Muzete zavrit toto okno a vratit se do Open Salamandera.<br>"
-                        "You can close this tab and return to Open Salamander.</p></div></body></html>";
-
-                    std::string resp = "HTTP/1.1 200 OK\r\n"
-                                       "Content-Type: text/html; charset=utf-8\r\n"
-                                       "Content-Length: " + std::to_string(htmlBody.length()) + "\r\n"
-                                       "Connection: close\r\n\r\n" + htmlBody;
-
-                    send(clientSock, resp.c_str(), (int)resp.length(), 0);
+                    shutdown(clientSock, SD_BOTH);
+                    closesocket(clientSock);
                 }
-                shutdown(clientSock, SD_BOTH);
-                closesocket(clientSock);
             }
         }
 
@@ -566,7 +604,11 @@ bool AuthManager::LaunchInteractiveAuth(HWND hParent, std::string* errorOut)
         }
     }
 
-    closesocket(listenSock);
+    closesocket(listenSock4);
+    if (listenSock6 != INVALID_SOCKET)
+    {
+        closesocket(listenSock6);
+    }
     WSACleanup();
 
     if (!received || authCode.empty())
