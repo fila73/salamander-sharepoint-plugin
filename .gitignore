@@ -1,0 +1,14 @@
+*.o
+*.res
+*.spl
+*.slg
+*.zip
+release_stage/
+release_staging/
+.vscode/
+build/
+*.map
+*.log
+*.dmp
+.gemini/
+cppcheck_report.txt
