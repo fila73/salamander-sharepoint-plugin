@@ -416,7 +416,11 @@ BOOL WINAPI CPluginFS::ChangePath(int currentFSNameIndex, char* fsName, int fsNa
                                   const char* userPart, char* cutFileName, BOOL* pathWasCut,
                                   BOOL forceRefresh, int mode)
 {
+    std::string oldPath = m_currentPath;
+
     if (pathWasCut) *pathWasCut = FALSE;
+    if (cutFileName) *cutFileName = '\0';
+    if (fsName) lstrcpynA(fsName, AssignedFSName, MAX_PATH);
 
     std::string target = (userPart && *userPart) ? userPart : "\\";
     if (target.empty() || target[0] != '\\') target = "\\" + target;
@@ -424,6 +428,28 @@ BOOL WINAPI CPluginFS::ChangePath(int currentFSNameIndex, char* fsName, int fsNa
     while (target.length() > 1 && target.back() == '\\') target.pop_back();
 
     m_currentPath = target;
+
+    // If navigating UP from a subpath, populate cutFileName so Salamander focuses the exited folder
+    if (cutFileName && !oldPath.empty() && oldPath.length() > target.length())
+    {
+        std::string prefix = (target == "\\") ? "\\" : (target + "\\");
+        if (oldPath.rfind(prefix, 0) == 0)
+        {
+            std::string rel = oldPath.substr(prefix.length());
+            size_t slashPos = rel.find('\\');
+            if (slashPos != std::string::npos)
+            {
+                rel = rel.substr(0, slashPos);
+            }
+            if (!rel.empty())
+            {
+                std::string ansiRel = SharePointHttp::HttpClient::Utf8ToAnsi(rel);
+                lstrcpynA(cutFileName, ansiRel.c_str(), MAX_PATH);
+                if (pathWasCut) *pathWasCut = TRUE;
+            }
+        }
+    }
+
     return TRUE;
 }
 
