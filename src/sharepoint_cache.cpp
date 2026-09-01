@@ -26,8 +26,9 @@ CacheManager& CacheManager::GetInstance()
 }
 
 CacheManager::CacheManager()
+    : m_currentAccountEmail(SharePointAuth::AuthManager::GetInstance().GetTokens().accountEmail),
+      m_dirty(false)
 {
-    m_currentAccountEmail = SharePointAuth::AuthManager::GetInstance().GetTokens().accountEmail;
     LoadFromDisk();
 }
 
@@ -400,8 +401,8 @@ void CacheManager::CheckForRemoteChangesAsync(std::function<void(const std::vect
 
 static void WriteString(std::ofstream& ofs, const std::string& str)
 {
-    uint32_t len = (uint32_t)str.length();
-    ofs.write((const char*)&len, sizeof(len));
+    uint32_t len = static_cast<uint32_t>(str.length());
+    ofs.write(reinterpret_cast<const char*>(&len), sizeof(len));
     if (len > 0)
     {
         ofs.write(str.data(), len);
@@ -411,7 +412,7 @@ static void WriteString(std::ofstream& ofs, const std::string& str)
 static bool ReadString(std::ifstream& ifs, std::string& str)
 {
     uint32_t len = 0;
-    if (!ifs.read((char*)&len, sizeof(len))) return false;
+    if (!ifs.read(reinterpret_cast<char*>(&len), sizeof(len))) return false;
     str.resize(len);
     if (len > 0)
     {
@@ -430,28 +431,28 @@ bool CacheManager::SaveToDisk()
     if (!ofs.is_open()) return false;
 
     uint32_t magic = 0x53504331; // "SPC1"
-    ofs.write((const char*)&magic, sizeof(magic));
+    ofs.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
 
-    uint32_t folderCount = (uint32_t)m_folders.size();
-    ofs.write((const char*)&folderCount, sizeof(folderCount));
+    uint32_t folderCount = static_cast<uint32_t>(m_folders.size());
+    ofs.write(reinterpret_cast<const char*>(&folderCount), sizeof(folderCount));
 
     for (const auto& [k, folder] : m_folders)
     {
         WriteString(ofs, folder.folderKey);
-        ofs.write((const char*)&folder.lastFetchedTick, sizeof(folder.lastFetchedTick));
+        ofs.write(reinterpret_cast<const char*>(&folder.lastFetchedTick), sizeof(folder.lastFetchedTick));
         uint8_t valid = folder.isValid ? 1 : 0;
-        ofs.write((const char*)&valid, sizeof(valid));
+        ofs.write(reinterpret_cast<const char*>(&valid), sizeof(valid));
 
-        uint32_t itemCount = (uint32_t)folder.items.size();
-        ofs.write((const char*)&itemCount, sizeof(itemCount));
+        uint32_t itemCount = static_cast<uint32_t>(folder.items.size());
+        ofs.write(reinterpret_cast<const char*>(&itemCount), sizeof(itemCount));
 
         for (const auto& item : folder.items)
         {
             WriteString(ofs, item.id);
             WriteString(ofs, item.name);
-            ofs.write((const char*)&item.size, sizeof(item.size));
-            ofs.write((const char*)&item.createdTime, sizeof(item.createdTime));
-            ofs.write((const char*)&item.modifiedTime, sizeof(item.modifiedTime));
+            ofs.write(reinterpret_cast<const char*>(&item.size), sizeof(item.size));
+            ofs.write(reinterpret_cast<const char*>(&item.createdTime), sizeof(item.createdTime));
+            ofs.write(reinterpret_cast<const char*>(&item.modifiedTime), sizeof(item.modifiedTime));
 
             uint8_t flags = 0;
             if (item.isFolder) flags |= 0x01;
@@ -460,7 +461,7 @@ bool CacheManager::SaveToDisk()
             if (item.isOneDrive) flags |= 0x08;
             if (item.isTrashed) flags |= 0x10;
             if (item.isShared) flags |= 0x20;
-            ofs.write((const char*)&flags, sizeof(flags));
+            ofs.write(reinterpret_cast<const char*>(&flags), sizeof(flags));
 
             WriteString(ofs, item.authorName);
             WriteString(ofs, item.authorEmail);
@@ -475,8 +476,8 @@ bool CacheManager::SaveToDisk()
         }
     }
 
-    uint32_t driveCount = (uint32_t)m_driveDeltaUrls.size();
-    ofs.write((const char*)&driveCount, sizeof(driveCount));
+    uint32_t driveCount = static_cast<uint32_t>(m_driveDeltaUrls.size());
+    ofs.write(reinterpret_cast<const char*>(&driveCount), sizeof(driveCount));
     for (const auto& [driveId, deltaUrl] : m_driveDeltaUrls)
     {
         WriteString(ofs, driveId);
@@ -496,10 +497,10 @@ bool CacheManager::LoadFromDisk()
     if (!ifs.is_open()) return false;
 
     uint32_t magic = 0;
-    if (!ifs.read((char*)&magic, sizeof(magic)) || magic != 0x53504331) return false;
+    if (!ifs.read(reinterpret_cast<char*>(&magic), sizeof(magic)) || magic != 0x53504331) return false;
 
     uint32_t folderCount = 0;
-    if (!ifs.read((char*)&folderCount, sizeof(folderCount))) return false;
+    if (!ifs.read(reinterpret_cast<char*>(&folderCount), sizeof(folderCount))) return false;
 
     std::lock_guard<std::mutex> lock(m_mutex);
     m_folders.clear();
@@ -508,25 +509,25 @@ bool CacheManager::LoadFromDisk()
     {
         CachedFolder folder;
         if (!ReadString(ifs, folder.folderKey)) return false;
-        if (!ifs.read((char*)&folder.lastFetchedTick, sizeof(folder.lastFetchedTick))) return false;
+        if (!ifs.read(reinterpret_cast<char*>(&folder.lastFetchedTick), sizeof(folder.lastFetchedTick))) return false;
         uint8_t valid = 0;
-        if (!ifs.read((char*)&valid, sizeof(valid))) return false;
+        if (!ifs.read(reinterpret_cast<char*>(&valid), sizeof(valid))) return false;
         folder.isValid = (valid != 0);
 
         uint32_t itemCount = 0;
-        if (!ifs.read((char*)&itemCount, sizeof(itemCount))) return false;
+        if (!ifs.read(reinterpret_cast<char*>(&itemCount), sizeof(itemCount))) return false;
 
         for (uint32_t i = 0; i < itemCount; ++i)
         {
             SharePointApi::SharePointItem item;
             if (!ReadString(ifs, item.id)) return false;
             if (!ReadString(ifs, item.name)) return false;
-            if (!ifs.read((char*)&item.size, sizeof(item.size))) return false;
-            if (!ifs.read((char*)&item.createdTime, sizeof(item.createdTime))) return false;
-            if (!ifs.read((char*)&item.modifiedTime, sizeof(item.modifiedTime))) return false;
+            if (!ifs.read(reinterpret_cast<char*>(&item.size), sizeof(item.size))) return false;
+            if (!ifs.read(reinterpret_cast<char*>(&item.createdTime), sizeof(item.createdTime))) return false;
+            if (!ifs.read(reinterpret_cast<char*>(&item.modifiedTime), sizeof(item.modifiedTime))) return false;
 
             uint8_t flags = 0;
-            if (!ifs.read((char*)&flags, sizeof(flags))) return false;
+            if (!ifs.read(reinterpret_cast<char*>(&flags), sizeof(flags))) return false;
             item.isFolder = (flags & 0x01) != 0;
             item.isSite = (flags & 0x02) != 0;
             item.isDrive = (flags & 0x04) != 0;
@@ -552,7 +553,7 @@ bool CacheManager::LoadFromDisk()
     }
 
     uint32_t driveCount = 0;
-    if (ifs.read((char*)&driveCount, sizeof(driveCount)))
+    if (ifs.read(reinterpret_cast<char*>(&driveCount), sizeof(driveCount)))
     {
         for (uint32_t d = 0; d < driveCount; ++d)
         {

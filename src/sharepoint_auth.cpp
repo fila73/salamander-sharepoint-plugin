@@ -154,7 +154,6 @@ std::string AuthManager::GetAccountDisplay() const
 
 std::string AuthManager::GetValidAccessToken(std::string* errorOut)
 {
-    std::string existingToken;
     std::string refreshToken;
     std::string clientId;
     std::string tenantId;
@@ -250,7 +249,6 @@ std::string AuthManager::Base64UrlEncode(const unsigned char* data, size_t lengt
 
     std::string ret;
     int i = 0;
-    int j = 0;
     unsigned char char_array_3[3];
     unsigned char char_array_4[4];
 
@@ -272,7 +270,7 @@ std::string AuthManager::Base64UrlEncode(const unsigned char* data, size_t lengt
 
     if (i)
     {
-        for (j = i; j < 3; j++)
+        for (int j = i; j < 3; j++)
             char_array_3[j] = '\0';
 
         char_array_4[0] = (char_array_3[0] & 0xfc) >> 2;
@@ -280,7 +278,7 @@ std::string AuthManager::Base64UrlEncode(const unsigned char* data, size_t lengt
         char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
         char_array_4[3] = char_array_3[2] & 0x3f;
 
-        for (j = 0; (j < i + 1); j++)
+        for (int j = 0; (j < i + 1); j++)
             ret += base64_chars[char_array_4[j]];
     }
 
