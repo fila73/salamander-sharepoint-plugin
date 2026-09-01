@@ -1,0 +1,187 @@
+// SPDX-FileCopyrightText: 2026 fila73
+// SPDX-FileContributor: Inspired by Red Salamander
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#ifndef __SHAREPOINT_RH2
+#define __SHAREPOINT_RH2
+
+#if defined(APSTUDIO_INVOKED) && !defined(APSTUDIO_READONLY_SYMBOLS)
+#error this file is not editable by Microsoft Visual C++
+#endif
+
+#define IDC_STATIC_1 3000
+#include "statics.rh2" // 3000 to 3039 are reserved
+
+#define IDS_PLUGINNAME              46
+#define IDS_ABOUT                   47
+#define IDS_PLUGIN_DESCRIPTION      48
+#define IDS_PLUGIN_HOME             49
+#define IDS_PLUGIN_BUGREP           50
+#define IDS_PLUGIN_EMAIL            51
+#define IDS_CFG_ALREADY_OPENED      52
+#define IDS_CFG_TITLE               54
+#define IDS_REQUIRE_SAL500          56
+
+#define IDI_FILE                    1000
+#define IDI_DIR                     1001
+#define IDI_FS                      1002
+#define IDI_SHAREPOINT              1003
+
+#define IDB_TOOLBAR16_PNG           102
+#define IDB_TOOLBAR256_PNG          103
+#define IDB_GRAYALPHA_PNG           104
+
+// Commands
+#define CM_OPEN_SHAREPOINT          1101
+#define CM_DISCONNECT               1102
+#define CM_REFRESH                  1103
+#define CM_CONFIG                   1104
+#define CM_ABOUT                    1105
+#define CM_CALC_SIZE                1106
+#define CM_OPEN_IN_BROWSER          1107
+#define CM_COPY_LINK                1108
+#define CM_RESTORE_TRASH            1109
+#define CM_EMPTY_TRASH              1110
+#define CM_FIND_FOCUS_TARGET        1111
+
+// String IDs for menus & dialogs
+#define IDS_MENU_CONNECT            2001
+#define IDS_MENU_DISCONNECT         2002
+#define IDS_MENU_REFRESH            2003
+#define IDS_MENU_CONFIG             2004
+#define IDS_MENU_ABOUT              2005
+#define IDS_MENU_CALC_SIZE          2006
+#define IDS_MENU_OPEN_IN_BROWSER    2007
+#define IDS_MENU_COPY_LINK          2008
+#define IDS_MENU_RESTORE_TRASH      2009
+#define IDS_MENU_EMPTY_TRASH        2010
+
+#define IDS_STATUS_CONNECTING       2101
+#define IDS_STATUS_DOWNLOADING      2102
+#define IDS_STATUS_AUTH_REQUIRED    2103
+#define IDS_STATUS_AUTH_SUCCESS     2104
+#define IDS_STATUS_AUTH_FAILED      2105
+#define IDS_AUTH_PROMPT_MSG         2106
+#define IDS_AUTH_WAITING_BROWSER    2107
+#define IDS_ERR_NETWORK             2108
+#define IDS_ERR_HTTP                2109
+#define IDS_ERR_AUTH_CANCELLED      2110
+#define IDS_ERR_PATH_NOT_FOUND      2111
+#define IDS_DOWNLOAD_PROGRESS_FMT   2112
+#define IDS_CONFIRM_DISCONNECT      2113
+#define IDS_LOGGED_IN_AS            2114
+#define IDS_NOT_LOGGED_IN           2115
+#define IDS_ONEDRIVE                2116
+#define IDS_SITES                   2117
+#define IDS_SHARED_WITH_ME          2118
+#define IDS_ERR_NO_CLIENT_ID        2123
+#define IDS_CALC_TITLE              2124
+#define IDS_CALC_RESULT_FMT         2125
+#define IDS_CALC_CANCELLED_FMT      2126
+#define IDS_ERR_CANNOT_CREATE_DIR_ROOT           2127
+#define IDS_ERR_CANNOT_CREATE_DIR_SHARED_WITH_ME 2128
+#define IDS_ERR_CANNOT_CREATE_DIR_SITES          2129
+#define IDS_ERR_CANNOT_RENAME_ROOT               2130
+#define IDS_ERR_CANNOT_DELETE_ROOT               2131
+#define IDS_CONFIRM_DELETE_TRASH_SINGLE          2132
+#define IDS_CONFIRM_DELETE_TRASH_MULTI           2133
+#define IDS_CONFIRM_DELETE_PERM_SINGLE           2134
+#define IDS_CONFIRM_DELETE_PERM_MULTI            2135
+#define IDS_UPLOAD_PROGRESS_FMT                  2136
+#define IDS_STATUS_UPLOADING                     2137
+#define IDS_ERR_CANNOT_UPLOAD_ROOT               2138
+#define IDS_TRASH                                2140
+#define IDS_RECENT                               2141
+#define IDS_LINK_COPIED                          2142
+#define IDS_CONFIRM_EMPTY_TRASH                  2143
+#define IDS_CFG_PAGE_DISPLAY                     2149
+#define IDS_CFG_PAGE_ACCOUNTS                    2150
+#define IDS_CFG_PAGE_GENERAL                     2150
+#define IDS_CFG_PAGE_CACHE                       2151
+#define IDS_CACHE_CLEARED                        2152
+#define IDS_CONFIRM_REMOVE_ACCOUNT               2153
+#define IDS_TTL_10SEC                            2154
+#define IDS_TTL_30SEC                            2155
+#define IDS_TTL_1MIN                             2156
+#define IDS_TTL_5MIN                             2157
+#define IDS_TTL_MANUAL                           2158
+#define IDS_MENU_SWITCH_ACCOUNT                  2159
+#define IDS_MENU_ADD_ACCOUNT                     2160
+#define IDS_TRANSFER_DOWNLOADING                 2161
+#define IDS_TRANSFER_UPLOADING                   2162
+#define IDS_TRANSFER_CANCEL                      2163
+#define IDS_TRANSFER_SPEED_FMT                   2164
+#define IDS_TRANSFER_BYTES_FMT                   2165
+#define IDS_TRANSFER_DELETING                    2166
+#define IDS_BTN_SAVE_KEYS                        2167
+#define IDS_KEYS_SAVED                           2168
+#define IDS_PROMPT_OVERWRITE_FILE                2169
+#define IDS_PROMPT_OVERWRITE_TITLE               2170
+#define IDS_PROMPT_OVERWRITE_SHAREPOINT          2171
+#define IDS_CFG_CACHE_ACTIVE_FMT                 2172
+#define IDS_CFG_CACHE_NO_ACTIVE                  2173
+#define IDS_BUTTON_OK                            2174
+#define IDS_BUTTON_CANCEL                        2175
+#define IDS_BUTTON_HELP                          2176
+#define IDS_ERR_CANNOT_GET_ITEM_ID               2177
+#define IDS_PROPERTIES_TITLE                     2178
+#define IDS_PROPERTIES_FMT                       2179
+#define IDS_DOWNLOAD_FAILED                      2180
+#define IDS_STORAGE_INFO_FMT                     2181
+#define IDS_STORAGE_UNLIMITED_FMT                2182
+#define IDS_CONFLICT_TITLE                       2183
+#define IDS_CONFLICT_PROMPT_UPLOAD               2184
+#define IDS_CONFLICT_PROMPT_DOWNLOAD             2185
+#define IDS_CONFLICT_SRC_FMT                     2186
+#define IDS_CONFLICT_DST_FMT                     2187
+#define IDS_CONFLICT_BTN_OVERWRITE               2188
+#define IDS_CONFLICT_BTN_KEEPBOTH                2189
+#define IDS_CONFLICT_BTN_SKIP                    2190
+#define IDS_CONFLICT_APPLY_ALL                   2191
+#define IDS_CONFLICT_DUP_LABEL                   2192
+#define IDS_CONFLICT_DUP_ALL                     2193
+#define IDS_CONFLICT_DUP_NEWEST                  2194
+#define IDS_CONFLICT_DUP_OLDEST                  2195
+#define IDS_CONFLICT_DUP_COUNT_FMT               2196
+#define IDS_TRANSFER_TOTAL_LABEL                 2197
+#define IDS_TRANSFER_TOTAL_FILES_FMT             2198
+#define IDS_TRANSFER_TOTAL_BYTES_FMT             2199
+#define IDS_CONFLICT_TITLE_DIR                   2200
+#define IDS_CONFLICT_PROMPT_UPLOAD_DIR           2201
+#define IDS_CONFLICT_PROMPT_DOWNLOAD_DIR         2202
+#define IDS_CONFLICT_DUP_COUNT_DIR_FMT           2203
+#define IDS_CONFLICT_DUP_ALL_DIR                 2204
+#define IDS_CONFLICT_DUP_NEWEST_DIR              2205
+#define IDS_CONFLICT_DUP_OLDEST_DIR              2206
+#define IDS_CONFLICT_BTN_MERGE                   2207
+#define IDS_CONFLICT_SRC_DIR_FMT                 2208
+#define IDS_CONFLICT_DST_DIR_FMT                 2209
+#define IDS_COL_AUTHOR                           2210
+#define IDS_COL_AUTHOR_DESC                      2211
+#define IDS_COL_SHARED                           2212
+#define IDS_COL_SHARED_DESC                      2213
+#define IDS_YES                                  2216
+#define IDS_NO                                   2217
+#define IDS_COL_MODIFIED_BY                      2218
+#define IDS_COL_MODIFIED_BY_DESC                 2219
+#define IDS_COL_WEBURL                           2220
+#define IDS_COL_WEBURL_DESC                      2221
+#define IDS_FIND_TITLE                           2222
+#define IDS_FIND_READY                           2223
+#define IDS_FIND_SEARCHING                       2224
+#define IDS_FIND_FINISHED_FMT                    2225
+#define IDS_FIND_STOPPED_FMT                     2226
+#define IDS_FIND_FOUND_FMT                       2227
+#define IDS_FIND_ADVANCED_ALL                    2228
+#define IDS_FIND_COL_NAME                        2229
+#define IDS_FIND_COL_PATH                        2230
+#define IDS_FIND_COL_SIZE                        2231
+#define IDS_FIND_COL_DATE                        2232
+#define IDS_FIND_COL_TIME                        2233
+#define IDS_FIND_COL_AUTHOR                      2234
+#define IDS_FIND_LOOKIN_ALL                      2235
+#define IDS_FIND_COL_MODIFIED_BY                 2236
+#define IDS_ERR_NO_PERMISSION_DELETE             2237
+#define IDS_ERR_NO_PERMISSION_RENAME             2238
+
+#endif // __SHAREPOINT_RH2

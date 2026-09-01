@@ -1,0 +1,35 @@
+// SPDX-FileCopyrightText: 2026 fila73 & Ondrej Kotas
+// SPDX-FileContributor: Dark Mode host policy and theme integration based on fork by Ondrej Kotas (KRtkovo-eu-AI)
+// SPDX-FileContributor: Inspired by Red Salamander
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#ifndef __SHAREPOINT_VERSINFO_RH2
+#define __SHAREPOINT_VERSINFO_RH2
+
+#if defined(APSTUDIO_INVOKED) && !defined(APSTUDIO_READONLY_SYMBOLS)
+#error this file is not editable by Microsoft Visual C++
+#endif
+
+#define VERSINFO_MAJOR       0
+#define VERSINFO_MINORA      1
+#define VERSINFO_MINORB      0
+
+#include "spl_vers.h"
+
+#define VERSINFO_COPYRIGHT   "Copyright \xA9 2026 fila73. Inspired by Red Salamander."
+#define VERSINFO_COMPANY     "fila73"
+
+#define VERSINFO_DESCRIPTION "Microsoft SharePoint Filesystem Plugin for Open Salamander (by fila73)"
+
+#ifdef _LANG
+#define VERSINFO_INTERNAL    "ENGLISH"
+#define VERSINFO_ORIGINAL    VERSINFO_INTERNAL ".SLG"
+#else
+#define VERSINFO_INTERNAL    "SHAREPOINT"
+#define VERSINFO_ORIGINAL    VERSINFO_INTERNAL ".SPL"
+#endif
+
+#define VERSINFO_SLG_WEB     "https://github.com/manison/OpenSalamander"
+#define VERSINFO_SLG_COMMENT "Microsoft SharePoint language module"
+
+#endif // __SHAREPOINT_VERSINFO_RH2

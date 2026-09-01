@@ -1,0 +1,749 @@
+// SPDX-FileCopyrightText: 2026 fila73
+// SPDX-FileContributor: Inspired by Red Salamander
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#include "precomp.h"
+#include "sharepoint_http.h"
+
+namespace SharePointHttp
+{
+
+std::wstring HttpClient::Utf8ToWide(const std::string& utf8)
+{
+    if (utf8.empty()) return L"";
+    int req = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.length(), NULL, 0);
+    if (req <= 0) return L"";
+    std::wstring wide(req, 0);
+    MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.length(), &wide[0], req);
+    return wide;
+}
+
+std::string HttpClient::WideToUtf8(const std::wstring& wide)
+{
+    if (wide.empty()) return "";
+    int req = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), (int)wide.length(), NULL, 0, NULL, NULL);
+    if (req <= 0) return "";
+    std::string utf8(req, 0);
+    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), (int)wide.length(), &utf8[0], req, NULL, NULL);
+    return utf8;
+}
+
+std::string HttpClient::UrlEncode(const std::string& str)
+{
+    std::string out;
+    static const char hexChars[] = "0123456789ABCDEF";
+    for (unsigned char c : str)
+    {
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~')
+        {
+            out.push_back((char)c);
+        }
+        else
+        {
+            out.push_back('%');
+            out.push_back(hexChars[(c >> 4) & 0x0F]);
+            out.push_back(hexChars[c & 0x0F]);
+        }
+    }
+    return out;
+}
+
+HttpClient::HttpClient()
+{
+}
+
+HttpClient::~HttpClient()
+{
+    Release();
+}
+
+bool HttpClient::Initialize(const std::wstring& userAgent)
+{
+    if (m_hSession) return true;
+
+    m_hSession = WinHttpOpen(userAgent.c_str(),
+                             WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                             WINHTTP_NO_PROXY_NAME,
+                             WINHTTP_NO_PROXY_BYPASS,
+                             0);
+    if (!m_hSession)
+        return false;
+
+    DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
+#ifdef WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3
+    protocols |= WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
+#endif
+    WinHttpSetOption(m_hSession, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof(protocols));
+
+    WinHttpSetTimeouts(m_hSession, 15000, 15000, 30000, 60000);
+
+    return true;
+}
+
+void HttpClient::Release()
+{
+    if (m_hSession)
+    {
+        WinHttpCloseHandle(m_hSession);
+        m_hSession = NULL;
+    }
+}
+
+HttpResponse HttpClient::Get(const std::string& url,
+                             const std::string& bearerToken,
+                             const std::map<std::string, std::string>& customHeaders)
+{
+    return ExecuteRequest(L"GET", url, "", "", bearerToken, customHeaders);
+}
+
+HttpResponse HttpClient::Post(const std::string& url,
+                              const std::string& body,
+                              const std::string& contentType,
+                              const std::string& bearerToken,
+                              const std::map<std::string, std::string>& customHeaders)
+{
+    return ExecuteRequest(L"POST", url, body, contentType, bearerToken, customHeaders);
+}
+
+HttpResponse HttpClient::Put(const std::string& url,
+                             const std::string& body,
+                             const std::string& contentType,
+                             const std::string& bearerToken,
+                             const std::map<std::string, std::string>& customHeaders)
+{
+    return ExecuteRequest(L"PUT", url, body, contentType, bearerToken, customHeaders);
+}
+
+HttpResponse HttpClient::Patch(const std::string& url,
+                               const std::string& body,
+                               const std::string& contentType,
+                               const std::string& bearerToken,
+                               const std::map<std::string, std::string>& customHeaders)
+{
+    return ExecuteRequest(L"PATCH", url, body, contentType, bearerToken, customHeaders);
+}
+
+HttpResponse HttpClient::Delete(const std::string& url,
+                                const std::string& bearerToken,
+                                const std::map<std::string, std::string>& customHeaders)
+{
+    return ExecuteRequest(L"DELETE", url, "", "", bearerToken, customHeaders);
+}
+
+HttpResponse HttpClient::ExecuteRequest(const std::wstring& verb,
+                                        const std::string& url,
+                                        const std::string& body,
+                                        const std::string& contentType,
+                                        const std::string& bearerToken,
+                                        const std::map<std::string, std::string>& customHeaders)
+{
+    HttpResponse resp;
+    if (!Initialize())
+    {
+        resp.errorMessage = "Failed to initialize WinHTTP session";
+        return resp;
+    }
+
+    std::wstring wUrl = Utf8ToWide(url);
+
+    URL_COMPONENTS urlComp{};
+    urlComp.dwStructSize = sizeof(urlComp);
+    wchar_t hostName[512] = {0};
+    wchar_t urlPath[4096] = {0};
+    urlComp.lpszHostName = hostName;
+    urlComp.dwHostNameLength = sizeof(hostName) / sizeof(hostName[0]);
+    urlComp.lpszUrlPath = urlPath;
+    urlComp.dwUrlPathLength = sizeof(urlPath) / sizeof(urlPath[0]);
+
+    if (!WinHttpCrackUrl(wUrl.c_str(), (DWORD)wUrl.length(), 0, &urlComp))
+    {
+        resp.errorMessage = "Invalid URL format: " + url;
+        return resp;
+    }
+
+    bool isHttps = (urlComp.nScheme == INTERNET_SCHEME_HTTPS);
+    INTERNET_PORT port = urlComp.nPort;
+
+    HINTERNET hConnect = WinHttpConnect(m_hSession, hostName, port, 0);
+    if (!hConnect)
+    {
+        resp.errorMessage = "WinHttpConnect failed (err=" + std::to_string(GetLastError()) + ")";
+        return resp;
+    }
+
+    DWORD flags = isHttps ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect,
+                                            verb.c_str(),
+                                            urlPath,
+                                            NULL,
+                                            WINHTTP_NO_REFERER,
+                                            WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                            flags);
+    if (!hRequest)
+    {
+        WinHttpCloseHandle(hConnect);
+        resp.errorMessage = "WinHttpOpenRequest failed (err=" + std::to_string(GetLastError()) + ")";
+        return resp;
+    }
+
+    // Build headers
+    std::wstring headers;
+    if (!bearerToken.empty())
+    {
+        headers += L"Authorization: Bearer " + Utf8ToWide(bearerToken) + L"\r\n";
+    }
+    if (!contentType.empty() && (verb == L"POST" || verb == L"PUT" || verb == L"PATCH"))
+    {
+        headers += L"Content-Type: " + Utf8ToWide(contentType) + L"\r\n";
+    }
+    for (const auto& [k, v] : customHeaders)
+    {
+        headers += Utf8ToWide(k) + L": " + Utf8ToWide(v) + L"\r\n";
+    }
+
+    BOOL sent = WinHttpSendRequest(hRequest,
+                                   headers.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.c_str(),
+                                   (DWORD)headers.length(),
+                                   body.empty() ? WINHTTP_NO_REQUEST_DATA : (LPVOID)body.data(),
+                                   (DWORD)body.length(),
+                                   (DWORD)body.length(),
+                                   0);
+    if (!sent)
+    {
+        resp.errorMessage = "WinHttpSendRequest failed (err=" + std::to_string(GetLastError()) + ")";
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        return resp;
+    }
+
+    if (!WinHttpReceiveResponse(hRequest, NULL))
+    {
+        resp.errorMessage = "WinHttpReceiveResponse failed (err=" + std::to_string(GetLastError()) + ")";
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        return resp;
+    }
+
+    // Status code
+    DWORD statusCode = 0;
+    DWORD statusCodeSize = sizeof(statusCode);
+    WinHttpQueryHeaders(hRequest,
+                        WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                        WINHTTP_HEADER_NAME_BY_INDEX,
+                        &statusCode,
+                        &statusCodeSize,
+                        WINHTTP_NO_HEADER_INDEX);
+    resp.statusCode = (int)statusCode;
+    resp.success = (resp.statusCode >= 200 && resp.statusCode < 300);
+
+    // Read body
+    std::string responseBody;
+    DWORD bytesAvailable = 0;
+    while (WinHttpQueryDataAvailable(hRequest, &bytesAvailable) && bytesAvailable > 0)
+    {
+        std::vector<char> buffer(bytesAvailable);
+        DWORD bytesRead = 0;
+        if (WinHttpReadData(hRequest, buffer.data(), bytesAvailable, &bytesRead) && bytesRead > 0)
+        {
+            responseBody.append(buffer.data(), bytesRead);
+        }
+        else
+        {
+            break;
+        }
+    }
+    resp.body = std::move(responseBody);
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    return resp;
+}
+
+bool HttpClient::DownloadToFile(const std::string& url,
+                                const std::wstring& targetLocalPath,
+                                const std::string& bearerToken,
+                                ProgressCallback progressCallback,
+                                const bool* cancelFlag,
+                                std::string* errorOut)
+{
+    if (!Initialize())
+    {
+        if (errorOut) *errorOut = "Failed to initialize WinHTTP";
+        return false;
+    }
+
+    std::wstring wUrl = Utf8ToWide(url);
+
+    URL_COMPONENTS urlComp{};
+    urlComp.dwStructSize = sizeof(urlComp);
+    wchar_t hostName[512] = {0};
+    wchar_t urlPath[4096] = {0};
+    urlComp.lpszHostName = hostName;
+    urlComp.dwHostNameLength = sizeof(hostName) / sizeof(hostName[0]);
+    urlComp.lpszUrlPath = urlPath;
+    urlComp.dwUrlPathLength = sizeof(urlPath) / sizeof(urlPath[0]);
+
+    if (!WinHttpCrackUrl(wUrl.c_str(), (DWORD)wUrl.length(), 0, &urlComp))
+    {
+        if (errorOut) *errorOut = "Invalid URL format: " + url;
+        return false;
+    }
+
+    bool isHttps = (urlComp.nScheme == INTERNET_SCHEME_HTTPS);
+    HINTERNET hConnect = WinHttpConnect(m_hSession, hostName, urlComp.nPort, 0);
+    if (!hConnect)
+    {
+        if (errorOut) *errorOut = "WinHttpConnect failed";
+        return false;
+    }
+
+    DWORD flags = isHttps ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", urlPath, NULL,
+                                            WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+    if (!hRequest)
+    {
+        WinHttpCloseHandle(hConnect);
+        if (errorOut) *errorOut = "WinHttpOpenRequest failed";
+        return false;
+    }
+
+    std::wstring headers;
+    if (!bearerToken.empty())
+    {
+        headers += L"Authorization: Bearer " + Utf8ToWide(bearerToken) + L"\r\n";
+    }
+
+    if (!WinHttpSendRequest(hRequest, headers.c_str(), (DWORD)headers.length(), NULL, 0, 0, 0) ||
+        !WinHttpReceiveResponse(hRequest, NULL))
+    {
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        if (errorOut) *errorOut = "Failed to send request or receive response";
+        return false;
+    }
+
+    DWORD statusCode = 0;
+    DWORD statusCodeSize = sizeof(statusCode);
+    WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                        WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusCodeSize, WINHTTP_NO_HEADER_INDEX);
+
+    if (statusCode < 200 || statusCode >= 300)
+    {
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        if (errorOut) *errorOut = "HTTP error code " + std::to_string(statusCode);
+        return false;
+    }
+
+    int64_t totalBytes = -1;
+    wchar_t contentLenStr[64] = {0};
+    DWORD contentLenSize = sizeof(contentLenStr);
+    if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_HEADER_NAME_BY_INDEX,
+                            contentLenStr, &contentLenSize, WINHTTP_NO_HEADER_INDEX))
+    {
+        wchar_t* endPtr = nullptr;
+        totalBytes = std::wcstoll(contentLenStr, &endPtr, 10);
+        if (endPtr == contentLenStr) totalBytes = -1;
+    }
+
+    HANDLE hFile = CreateFileW(targetLocalPath.c_str(), GENERIC_WRITE, 0, NULL,
+                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE)
+    {
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        if (errorOut) *errorOut = "Failed to create local destination file";
+        return false;
+    }
+
+    int64_t bytesTransferred = 0;
+    DWORD bytesAvailable = 0;
+    bool success = true;
+
+    while (WinHttpQueryDataAvailable(hRequest, &bytesAvailable) && bytesAvailable > 0)
+    {
+        if (cancelFlag && *cancelFlag)
+        {
+            success = false;
+            if (errorOut) *errorOut = "Download cancelled";
+            break;
+        }
+
+        std::vector<char> buffer(bytesAvailable);
+        DWORD bytesRead = 0;
+        if (WinHttpReadData(hRequest, buffer.data(), bytesAvailable, &bytesRead) && bytesRead > 0)
+        {
+            DWORD bytesWritten = 0;
+            if (!WriteFile(hFile, buffer.data(), bytesRead, &bytesWritten, NULL) || bytesWritten != bytesRead)
+            {
+                success = false;
+                if (errorOut) *errorOut = "Failed writing to destination file";
+                break;
+            }
+
+            bytesTransferred += bytesRead;
+            if (progressCallback)
+            {
+                if (!progressCallback(bytesTransferred, totalBytes))
+                {
+                    success = false;
+                    if (errorOut) *errorOut = "Download cancelled by user";
+                    break;
+                }
+            }
+        }
+        else
+        {
+            break;
+        }
+    }
+
+    CloseHandle(hFile);
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+
+    if (!success)
+    {
+        DeleteFileW(targetLocalPath.c_str());
+    }
+
+    return success;
+}
+
+bool HttpClient::UploadSimpleFile(const std::string& url,
+                                  const std::wstring& localFilePath,
+                                  const std::string& contentType,
+                                  const std::string& bearerToken,
+                                  ProgressCallback progressCallback,
+                                  const bool* cancelFlag,
+                                  std::string* responseBodyOut,
+                                  std::string* errorOut)
+{
+    if (!Initialize())
+    {
+        if (errorOut) *errorOut = "Failed to initialize WinHTTP";
+        return false;
+    }
+
+    HANDLE hFile = CreateFileW(localFilePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL,
+                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE)
+    {
+        if (errorOut) *errorOut = "Failed to open local file for reading";
+        return false;
+    }
+
+    LARGE_INTEGER fileSize;
+    if (!GetFileSizeEx(hFile, &fileSize))
+    {
+        CloseHandle(hFile);
+        if (errorOut) *errorOut = "Failed to get local file size";
+        return false;
+    }
+
+    std::wstring wUrl = Utf8ToWide(url);
+
+    URL_COMPONENTS urlComp{};
+    urlComp.dwStructSize = sizeof(urlComp);
+    wchar_t hostName[512] = {0};
+    wchar_t urlPath[4096] = {0};
+    urlComp.lpszHostName = hostName;
+    urlComp.dwHostNameLength = sizeof(hostName) / sizeof(hostName[0]);
+    urlComp.lpszUrlPath = urlPath;
+    urlComp.dwUrlPathLength = sizeof(urlPath) / sizeof(urlPath[0]);
+
+    if (!WinHttpCrackUrl(wUrl.c_str(), (DWORD)wUrl.length(), 0, &urlComp))
+    {
+        CloseHandle(hFile);
+        if (errorOut) *errorOut = "Invalid URL format: " + url;
+        return false;
+    }
+
+    bool isHttps = (urlComp.nScheme == INTERNET_SCHEME_HTTPS);
+    HINTERNET hConnect = WinHttpConnect(m_hSession, hostName, urlComp.nPort, 0);
+    if (!hConnect)
+    {
+        CloseHandle(hFile);
+        if (errorOut) *errorOut = "WinHttpConnect failed";
+        return false;
+    }
+
+    DWORD flags = isHttps ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"PUT", urlPath, NULL,
+                                            WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+    if (!hRequest)
+    {
+        CloseHandle(hFile);
+        WinHttpCloseHandle(hConnect);
+        if (errorOut) *errorOut = "WinHttpOpenRequest failed";
+        return false;
+    }
+
+    std::wstring headers;
+    if (!bearerToken.empty())
+    {
+        headers += L"Authorization: Bearer " + Utf8ToWide(bearerToken) + L"\r\n";
+    }
+    if (!contentType.empty())
+    {
+        headers += L"Content-Type: " + Utf8ToWide(contentType) + L"\r\n";
+    }
+
+    if (!WinHttpSendRequest(hRequest, headers.c_str(), (DWORD)headers.length(),
+                            NULL, 0, (DWORD)fileSize.QuadPart, 0))
+    {
+        CloseHandle(hFile);
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        if (errorOut) *errorOut = "Failed to send upload request header";
+        return false;
+    }
+
+    std::vector<char> buffer(256 * 1024);
+    int64_t bytesUploaded = 0;
+    bool success = true;
+    DWORD bytesRead = 0;
+
+    while (ReadFile(hFile, buffer.data(), (DWORD)buffer.size(), &bytesRead, NULL) && bytesRead > 0)
+    {
+        if (cancelFlag && *cancelFlag)
+        {
+            success = false;
+            if (errorOut) *errorOut = "Upload cancelled";
+            break;
+        }
+
+        DWORD written = 0;
+        if (!WinHttpWriteData(hRequest, buffer.data(), bytesRead, &written) || written != bytesRead)
+        {
+            success = false;
+            if (errorOut) *errorOut = "Failed writing file data during upload";
+            break;
+        }
+
+        bytesUploaded += bytesRead;
+        if (progressCallback)
+        {
+            if (!progressCallback(bytesUploaded, fileSize.QuadPart))
+            {
+                success = false;
+                if (errorOut) *errorOut = "Upload cancelled by user";
+                break;
+            }
+        }
+    }
+
+    CloseHandle(hFile);
+
+    if (success && !WinHttpReceiveResponse(hRequest, NULL))
+    {
+        success = false;
+        if (errorOut) *errorOut = "Failed to receive upload response";
+    }
+
+    if (success)
+    {
+        DWORD statusCode = 0;
+        DWORD statusCodeSize = sizeof(statusCode);
+        WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusCodeSize, WINHTTP_NO_HEADER_INDEX);
+
+        if (statusCode < 200 || statusCode >= 300)
+        {
+            success = false;
+            if (errorOut) *errorOut = "HTTP upload error: " + std::to_string(statusCode);
+        }
+
+        std::string responseBody;
+        DWORD bytesAvailable = 0;
+        while (WinHttpQueryDataAvailable(hRequest, &bytesAvailable) && bytesAvailable > 0)
+        {
+            std::vector<char> respBuffer(bytesAvailable);
+            DWORD respBytesRead = 0;
+            if (WinHttpReadData(hRequest, respBuffer.data(), bytesAvailable, &respBytesRead) && respBytesRead > 0)
+            {
+                responseBody.append(respBuffer.data(), respBytesRead);
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        if (responseBodyOut)
+        {
+            *responseBodyOut = std::move(responseBody);
+        }
+    }
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    return success;
+}
+
+HttpResponse HttpClient::UploadChunk(const std::string& uploadUrl,
+                                     const unsigned char* buffer,
+                                     size_t bufferLen,
+                                     const std::string& contentRangeHeader,
+                                     const std::string& bearerToken)
+{
+    HttpResponse resp;
+    if (!Initialize())
+    {
+        resp.errorMessage = "Failed to initialize WinHTTP";
+        return resp;
+    }
+
+    std::wstring wUrl = Utf8ToWide(uploadUrl);
+
+    URL_COMPONENTS urlComp{};
+    urlComp.dwStructSize = sizeof(urlComp);
+    wchar_t hostName[512] = {0};
+    wchar_t urlPath[4096] = {0};
+    urlComp.lpszHostName = hostName;
+    urlComp.dwHostNameLength = sizeof(hostName) / sizeof(hostName[0]);
+    urlComp.lpszUrlPath = urlPath;
+    urlComp.dwUrlPathLength = sizeof(urlPath) / sizeof(urlPath[0]);
+
+    if (!WinHttpCrackUrl(wUrl.c_str(), (DWORD)wUrl.length(), 0, &urlComp))
+    {
+        resp.errorMessage = "Invalid upload URL";
+        return resp;
+    }
+
+    bool isHttps = (urlComp.nScheme == INTERNET_SCHEME_HTTPS);
+    HINTERNET hConnect = WinHttpConnect(m_hSession, hostName, urlComp.nPort, 0);
+    if (!hConnect)
+    {
+        resp.errorMessage = "WinHttpConnect failed";
+        return resp;
+    }
+
+    DWORD flags = isHttps ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"PUT", urlPath, NULL,
+                                            WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+    if (!hRequest)
+    {
+        WinHttpCloseHandle(hConnect);
+        resp.errorMessage = "WinHttpOpenRequest failed";
+        return resp;
+    }
+
+    std::wstring headers = L"Content-Range: " + Utf8ToWide(contentRangeHeader) + L"\r\n";
+    if (!bearerToken.empty())
+    {
+        headers += L"Authorization: Bearer " + Utf8ToWide(bearerToken) + L"\r\n";
+    }
+
+    BOOL sent = WinHttpSendRequest(hRequest, headers.c_str(), (DWORD)headers.length(),
+                                   (LPVOID)buffer, (DWORD)bufferLen, (DWORD)bufferLen, 0);
+    if (!sent || !WinHttpReceiveResponse(hRequest, NULL))
+    {
+        resp.errorMessage = "Failed sending chunk or receiving response";
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        return resp;
+    }
+
+    DWORD statusCode = 0;
+    DWORD statusCodeSize = sizeof(statusCode);
+    WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                        WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusCodeSize, WINHTTP_NO_HEADER_INDEX);
+    resp.statusCode = (int)statusCode;
+    resp.success = (resp.statusCode >= 200 && resp.statusCode < 300);
+
+    std::string responseBody;
+    DWORD bytesAvailable = 0;
+    while (WinHttpQueryDataAvailable(hRequest, &bytesAvailable) && bytesAvailable > 0)
+    {
+        std::vector<char> respBuffer(bytesAvailable);
+        DWORD respBytesRead = 0;
+        if (WinHttpReadData(hRequest, respBuffer.data(), bytesAvailable, &respBytesRead) && respBytesRead > 0)
+        {
+            responseBody.append(respBuffer.data(), respBytesRead);
+        }
+        else
+        {
+            break;
+        }
+    }
+    resp.body = std::move(responseBody);
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    return resp;
+}
+
+std::string HttpClient::AnsiToUtf8(const std::string& ansi)
+{
+    if (ansi.empty()) return "";
+    int wlen = MultiByteToWideChar(CP_ACP, 0, ansi.c_str(), -1, NULL, 0);
+    if (wlen <= 0) return ansi;
+    std::wstring wide(wlen - 1, L'\0');
+    MultiByteToWideChar(CP_ACP, 0, ansi.c_str(), -1, &wide[0], wlen);
+    return WideToUtf8(wide);
+}
+
+std::string HttpClient::Utf8ToAnsi(const std::string& utf8)
+{
+    if (utf8.empty()) return "";
+    std::wstring wide = Utf8ToWide(utf8);
+    int alen = WideCharToMultiByte(CP_ACP, 0, wide.c_str(), -1, NULL, 0, NULL, NULL);
+    if (alen <= 0) return utf8;
+    std::string ansi(alen - 1, '\0');
+    WideCharToMultiByte(CP_ACP, 0, wide.c_str(), -1, &ansi[0], alen, NULL, NULL);
+    return ansi;
+}
+
+std::wstring HttpClient::AnsiToWide(const std::string& ansi)
+{
+    if (ansi.empty()) return L"";
+    int wlen = MultiByteToWideChar(CP_ACP, 0, ansi.c_str(), -1, NULL, 0);
+    if (wlen <= 0) return L"";
+    std::wstring wide(wlen - 1, L'\0');
+    MultiByteToWideChar(CP_ACP, 0, ansi.c_str(), -1, &wide[0], wlen);
+    return wide;
+}
+
+std::string HttpClient::WideToAnsi(const std::wstring& wide)
+{
+    if (wide.empty()) return "";
+    int alen = WideCharToMultiByte(CP_ACP, 0, wide.c_str(), -1, NULL, 0, NULL, NULL);
+    if (alen <= 0) return "";
+    std::string ansi(alen - 1, '\0');
+    WideCharToMultiByte(CP_ACP, 0, wide.c_str(), -1, &ansi[0], alen, NULL, NULL);
+    return ansi;
+}
+
+std::wstring HttpClient::SanitizeFileNameForLocalFsW(const std::wstring& name, wchar_t replacementChar)
+{
+    if (name.empty()) return L"";
+    std::wstring result = name;
+    for (size_t i = 0; i < result.size(); ++i)
+    {
+        wchar_t c = result[i];
+        if (c == L'\\' || c == L'/' || c == L':' || c == L'*' ||
+            c == L'?' || c == L'"' || c == L'<' || c == L'>' ||
+            c == L'|' || c < 32)
+        {
+            result[i] = replacementChar;
+        }
+    }
+    while (!result.empty() && (result.back() == L' ' || result.back() == L'.'))
+    {
+        result.pop_back();
+    }
+    if (result.empty()) result = L"_";
+    return result;
+}
+
+std::string HttpClient::SanitizeFileNameForLocalFs(const std::string& name, char replacementChar)
+{
+    if (name.empty()) return "";
+    std::wstring wName = Utf8ToWide(name);
+    std::wstring wClean = SanitizeFileNameForLocalFsW(wName, (wchar_t)replacementChar);
+    return WideToUtf8(wClean);
+}
+
+} // namespace SharePointHttp
