@@ -264,38 +264,25 @@ void WINAPI CPluginInterfaceForFS::ExecuteOnFS(int panel, CPluginFSInterfaceAbst
 
     if (isDir)
     {
+        char newPath[MAX_PATH];
+        lstrcpynA(newPath, fs->GetCurrentPathStr().c_str(), MAX_PATH);
+
         if (isDir == 2) // ".."
         {
-            std::string curPath = fs->GetCurrentPathStr();
-            std::string parentPath = "\\";
-            std::string focusName;
-
-            size_t slashPos = curPath.rfind('\\');
-            if (slashPos != std::string::npos && slashPos > 0)
+            char* cutDir = NULL;
+            if (SalamanderGeneral->CutDirectory(newPath, &cutDir))
             {
-                parentPath = curPath.substr(0, slashPos);
-                focusName = curPath.substr(slashPos + 1);
+                SalamanderGeneral->ChangePanelPathToPluginFS(panel, pluginFSName, newPath, NULL,
+                                                             -1, cutDir);
             }
-            else if (!curPath.empty() && curPath != "\\")
-            {
-                parentPath = "\\";
-                focusName = (curPath[0] == '\\') ? curPath.substr(1) : curPath;
-            }
-
-            std::string ansiFocus = SharePointHttp::HttpClient::Utf8ToAnsi(focusName);
-
-            fs = NULL; // pointer might become invalid after ChangePanelPath
-            SalamanderGeneral->ChangePanelPathToPluginFS(panel, pluginFSName, parentPath.c_str(), NULL,
-                                                         -1, ansiFocus.empty() ? NULL : ansiFocus.c_str());
         }
         else // subdirectory
         {
-            std::string curPath = fs->GetCurrentPathStr();
-            if (curPath.empty() || curPath.back() != '\\') curPath += "\\";
-            curPath += (file.Name ? file.Name : "");
+            if (newPath[0] == '\0') strcpy(newPath, "\\");
+            if (newPath[strlen(newPath) - 1] != '\\') strcat(newPath, "\\");
+            if (file.Name) strncat(newPath, file.Name, MAX_PATH - strlen(newPath) - 1);
 
-            fs = NULL;
-            SalamanderGeneral->ChangePanelPathToPluginFS(panel, pluginFSName, curPath.c_str());
+            SalamanderGeneral->ChangePanelPathToPluginFS(panel, pluginFSName, newPath);
         }
     }
 }

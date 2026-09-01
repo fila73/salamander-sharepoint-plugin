@@ -335,32 +335,18 @@ BOOL WINAPI CPluginFS::GetFullName(CFileData& file, int isDir, char* buf, int bu
 {
     if (!buf || bufSize <= 0) return FALSE;
 
-    std::string path;
-    if (m_currentPath.empty() || m_currentPath == "\\")
+    lstrcpynA(buf, m_currentPath.c_str(), bufSize);
+    if (isDir == 2) // ".."
     {
-        path = "\\" + std::string(file.Name ? file.Name : "");
+        return SalamanderGeneral->CutDirectory(buf, NULL);
     }
     else
     {
-        if (isDir == 2) // ".."
-        {
-            size_t slashPos = m_currentPath.rfind('\\');
-            if (slashPos == std::string::npos || slashPos == 0)
-                path = "\\";
-            else
-                path = m_currentPath.substr(0, slashPos);
-        }
-        else
-        {
-            path = m_currentPath;
-            if (path.back() != '\\') path += "\\";
-            path += (file.Name ? file.Name : "");
-        }
+        if (buf[0] == '\0') strcpy(buf, "\\");
+        if (buf[strlen(buf) - 1] != '\\') strcat(buf, "\\");
+        if (file.Name) strncat(buf, file.Name, bufSize - strlen(buf) - 1);
+        return TRUE;
     }
-
-    strncpy(buf, path.c_str(), bufSize - 1);
-    buf[bufSize - 1] = '\0';
-    return TRUE;
 }
 
 BOOL WINAPI CPluginFS::GetFullFSPath(HWND parent, const char* fsName, char* path, int pathSize, BOOL& success)
