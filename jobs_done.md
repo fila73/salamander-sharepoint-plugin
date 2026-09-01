@@ -51,3 +51,9 @@ Chronologický přehled dokončených prací, implementačních kroků a vyřeš
 - **Příčina**: Struktura `CFileData.Name` byla předávána jako ukazatel na dočasný C++ string (`item.name.c_str()`). Salamander při uvolňování/obnově panelu volá `SalamanderGeneral->Free(file.Name)` a očekává paměť alokovanou přes `SalamanderGeneral->DupStr` / `SalamanderGeneral->Alloc`.
 - **Řešení**:
   - Vytvořena funkce `AddItemToDir()`, která správně alokuje `file.Name` přes `SalamanderGeneral->DupStr()`, nastavuje atributy, ikony (`pitFromRegistry`), flags `SALDIRFLAG_IGNOREDUPDIRS` a navigační položku `..`.
+
+### 7. Oprava zachování kurzoru/focusu při navigaci nahoru (`cutFileName`)
+- **Problém**: Při přechodu do nadřazeného adresáře (`..` nebo Backspace) skočil kurzor na první položku místo na složku, ze které uživatel vystoupil.
+- **Příčina**: V `CPluginFS::ChangePath` nebyly nastaveny výstupní parametry `cutFileName` a `pathWasCut`.
+- **Řešení**:
+  - V `ChangePath` se při přechodu z hlubší cesty do nadřazené vypočte název opouštěné složky a předá se do `cutFileName` spolu s `*pathWasCut = TRUE`. Salamander na ni automaticky nastaví kurzor.
