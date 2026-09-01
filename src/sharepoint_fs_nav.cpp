@@ -1,0 +1,637 @@
+// SPDX-FileCopyrightText: 2026 fila73
+// SPDX-FileContributor: Inspired by Red Salamander
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#include "precomp.h"
+#include "sharepoint_fs.h"
+#include "sharepoint_auth.h"
+#include "sharepoint_api.h"
+#include "sharepoint_cache.h"
+#include "sharepoint_http.h"
+#include "sharepoint_log.h"
+#include "dialogs.h"
+
+#define SHAREPOINT_COL_AUTHOR_ID       1
+#define SHAREPOINT_COL_MODIFIED_BY_ID  2
+#define SHAREPOINT_COL_SHARED_ID       3
+#define SHAREPOINT_COL_WEBURL_ID       4
+
+static DWORD s_authorWidth = MAKELONG(130, 130);
+static DWORD s_authorFixedWidth = MAKELONG(0, 0);
+
+static DWORD s_modifiedByWidth = MAKELONG(130, 130);
+static DWORD s_modifiedByFixedWidth = MAKELONG(0, 0);
+
+static DWORD s_sharedWidth = MAKELONG(60, 60);
+static DWORD s_sharedFixedWidth = MAKELONG(0, 0);
+
+static DWORD s_webUrlWidth = MAKELONG(180, 180);
+static DWORD s_webUrlFixedWidth = MAKELONG(0, 0);
+
+// Global transfer variables provided by Salamander
+static const CFileData** s_transferFileData = NULL;
+static int* s_transferIsDir = NULL;
+static char* s_transferBuffer = NULL;
+static int* s_transferLen = NULL;
+static DWORD* s_transferRowData = NULL;
+static CPluginDataInterfaceAbstract** s_transferPluginDataIface = NULL;
+static DWORD* s_transferActCustomData = NULL;
+
+static std::map<std::string, std::string> s_pathToIdMap;
+static std::map<std::string, std::string> s_pathToDriveMap;
+static std::map<std::string, std::string> s_pathToSiteMap;
+static std::mutex s_pathMapMutex;
+
+struct SharePointPluginData
+{
+    std::string id;
+    std::string driveId;
+    std::string siteId;
+    std::string authorName;
+    std::string lastModifyingUserName;
+    std::string webUrl;
+    bool isShared = false;
+};
+
+static CSharePointPluginDataInterface s_pluginDataInterface;
+
+void WINAPI CSharePointPluginDataInterface::ReleasePluginData(CFileData& file, BOOL isDir)
+{
+    if (file.PluginData != 0)
+    {
+        delete reinterpret_cast<SharePointPluginData*>(file.PluginData);
+        file.PluginData = 0;
+    }
+}
+
+int WINAPI CSharePointPluginDataInterface::CompareFilesFromFS(const CFileData* file1, const CFileData* file2)
+{
+    if (!file1 || !file2) return 0;
+    return _stricmp(file1->Name ? file1->Name : "", file2->Name ? file2->Name : "");
+}
+
+static void WINAPI GetAuthorColumnText()
+{
+    if (s_transferFileData && *s_transferFileData && (*s_transferFileData)->PluginData)
+    {
+        auto* pData = reinterpret_cast<const SharePointPluginData*>((*s_transferFileData)->PluginData);
+        if (!pData->authorName.empty())
+        {
+            int len = (int)pData->authorName.length();
+            if (len > TRANSFER_BUFFER_MAX - 1) len = TRANSFER_BUFFER_MAX - 1;
+            memcpy(s_transferBuffer, pData->authorName.data(), len);
+            *s_transferLen = len;
+            return;
+        }
+    }
+    *s_transferLen = 0;
+}
+
+static void WINAPI GetModifiedByColumnText()
+{
+    if (s_transferFileData && *s_transferFileData && (*s_transferFileData)->PluginData)
+    {
+        auto* pData = reinterpret_cast<const SharePointPluginData*>((*s_transferFileData)->PluginData);
+        if (!pData->lastModifyingUserName.empty())
+        {
+            int len = (int)pData->lastModifyingUserName.length();
+            if (len > TRANSFER_BUFFER_MAX - 1) len = TRANSFER_BUFFER_MAX - 1;
+            memcpy(s_transferBuffer, pData->lastModifyingUserName.data(), len);
+            *s_transferLen = len;
+            return;
+        }
+    }
+    *s_transferLen = 0;
+}
+
+static void WINAPI GetSharedColumnText()
+{
+    if (s_transferFileData && *s_transferFileData && (*s_transferFileData)->PluginData)
+    {
+        auto* pData = reinterpret_cast<const SharePointPluginData*>((*s_transferFileData)->PluginData);
+        const char* str = pData->isShared ? "Yes" : "No";
+        int len = (int)strlen(str);
+        if (len > TRANSFER_BUFFER_MAX - 1) len = TRANSFER_BUFFER_MAX - 1;
+        memcpy(s_transferBuffer, str, len);
+        *s_transferLen = len;
+        return;
+    }
+    *s_transferLen = 0;
+}
+
+static void WINAPI GetWebUrlColumnText()
+{
+    if (s_transferFileData && *s_transferFileData && (*s_transferFileData)->PluginData)
+    {
+        auto* pData = reinterpret_cast<const SharePointPluginData*>((*s_transferFileData)->PluginData);
+        if (!pData->webUrl.empty())
+        {
+            int len = (int)pData->webUrl.length();
+            if (len > TRANSFER_BUFFER_MAX - 1) len = TRANSFER_BUFFER_MAX - 1;
+            memcpy(s_transferBuffer, pData->webUrl.data(), len);
+            *s_transferLen = len;
+            return;
+        }
+    }
+    *s_transferLen = 0;
+}
+
+void WINAPI CSharePointPluginDataInterface::SetupView(BOOL leftPanel, CSalamanderViewAbstract* view,
+                                                      const char* archivePath, const CFileData* upperDir)
+{
+    if (!view) return;
+
+    view->GetTransferVariables(s_transferFileData, s_transferIsDir, s_transferBuffer, s_transferLen,
+                               s_transferRowData, s_transferPluginDataIface, s_transferActCustomData);
+
+    if (view->GetViewMode() == VIEW_MODE_DETAILED)
+    {
+        int count = view->GetColumnsCount();
+
+        // Author column
+        CColumn colAuthor;
+        memset(&colAuthor, 0, sizeof(colAuthor));
+        lstrcpynA(colAuthor.Name, LoadStr(IDS_COL_AUTHOR), sizeof(colAuthor.Name));
+        lstrcpynA(colAuthor.Description, LoadStr(IDS_COL_AUTHOR_DESC), sizeof(colAuthor.Description));
+        colAuthor.GetText = GetAuthorColumnText;
+        colAuthor.CustomData = SHAREPOINT_COL_AUTHOR_ID;
+        colAuthor.SupportSorting = 1;
+        colAuthor.LeftAlignment = 1;
+        colAuthor.ID = COLUMN_ID_CUSTOM;
+        colAuthor.Width = leftPanel ? LOWORD(s_authorWidth) : HIWORD(s_authorWidth);
+        colAuthor.FixedWidth = leftPanel ? LOWORD(s_authorFixedWidth) : HIWORD(s_authorFixedWidth);
+        view->InsertColumn(count++, &colAuthor);
+
+        // Modified By column
+        CColumn colModified;
+        memset(&colModified, 0, sizeof(colModified));
+        lstrcpynA(colModified.Name, LoadStr(IDS_COL_MODIFIED_BY), sizeof(colModified.Name));
+        lstrcpynA(colModified.Description, LoadStr(IDS_COL_MODIFIED_BY_DESC), sizeof(colModified.Description));
+        colModified.GetText = GetModifiedByColumnText;
+        colModified.CustomData = SHAREPOINT_COL_MODIFIED_BY_ID;
+        colModified.SupportSorting = 1;
+        colModified.LeftAlignment = 1;
+        colModified.ID = COLUMN_ID_CUSTOM;
+        colModified.Width = leftPanel ? LOWORD(s_modifiedByWidth) : HIWORD(s_modifiedByWidth);
+        colModified.FixedWidth = leftPanel ? LOWORD(s_modifiedByFixedWidth) : HIWORD(s_modifiedByFixedWidth);
+        view->InsertColumn(count++, &colModified);
+
+        // Shared column
+        CColumn colShared;
+        memset(&colShared, 0, sizeof(colShared));
+        lstrcpynA(colShared.Name, LoadStr(IDS_COL_SHARED), sizeof(colShared.Name));
+        lstrcpynA(colShared.Description, LoadStr(IDS_COL_SHARED_DESC), sizeof(colShared.Description));
+        colShared.GetText = GetSharedColumnText;
+        colShared.CustomData = SHAREPOINT_COL_SHARED_ID;
+        colShared.SupportSorting = 1;
+        colShared.LeftAlignment = 0;
+        colShared.ID = COLUMN_ID_CUSTOM;
+        colShared.Width = leftPanel ? LOWORD(s_sharedWidth) : HIWORD(s_sharedWidth);
+        colShared.FixedWidth = leftPanel ? LOWORD(s_sharedFixedWidth) : HIWORD(s_sharedFixedWidth);
+        view->InsertColumn(count++, &colShared);
+
+        // Web URL column
+        CColumn colWeb;
+        memset(&colWeb, 0, sizeof(colWeb));
+        lstrcpynA(colWeb.Name, LoadStr(IDS_COL_WEBURL), sizeof(colWeb.Name));
+        lstrcpynA(colWeb.Description, LoadStr(IDS_COL_WEBURL_DESC), sizeof(colWeb.Description));
+        colWeb.GetText = GetWebUrlColumnText;
+        colWeb.CustomData = SHAREPOINT_COL_WEBURL_ID;
+        colWeb.SupportSorting = 1;
+        colWeb.LeftAlignment = 1;
+        colWeb.ID = COLUMN_ID_CUSTOM;
+        colWeb.Width = leftPanel ? LOWORD(s_webUrlWidth) : HIWORD(s_webUrlWidth);
+        colWeb.FixedWidth = leftPanel ? LOWORD(s_webUrlFixedWidth) : HIWORD(s_webUrlFixedWidth);
+        view->InsertColumn(count++, &colWeb);
+    }
+}
+
+void WINAPI CSharePointPluginDataInterface::ColumnFixedWidthShouldChange(BOOL leftPanel, const CColumn* column, int newFixedWidth)
+{
+    if (!column) return;
+    if (leftPanel)
+    {
+        switch (column->CustomData)
+        {
+        case SHAREPOINT_COL_AUTHOR_ID: s_authorFixedWidth = MAKELONG(newFixedWidth, HIWORD(s_authorFixedWidth)); break;
+        case SHAREPOINT_COL_MODIFIED_BY_ID: s_modifiedByFixedWidth = MAKELONG(newFixedWidth, HIWORD(s_modifiedByFixedWidth)); break;
+        case SHAREPOINT_COL_SHARED_ID: s_sharedFixedWidth = MAKELONG(newFixedWidth, HIWORD(s_sharedFixedWidth)); break;
+        case SHAREPOINT_COL_WEBURL_ID: s_webUrlFixedWidth = MAKELONG(newFixedWidth, HIWORD(s_webUrlFixedWidth)); break;
+        }
+    }
+    else
+    {
+        switch (column->CustomData)
+        {
+        case SHAREPOINT_COL_AUTHOR_ID: s_authorFixedWidth = MAKELONG(LOWORD(s_authorFixedWidth), newFixedWidth); break;
+        case SHAREPOINT_COL_MODIFIED_BY_ID: s_modifiedByFixedWidth = MAKELONG(LOWORD(s_modifiedByFixedWidth), newFixedWidth); break;
+        case SHAREPOINT_COL_SHARED_ID: s_sharedFixedWidth = MAKELONG(LOWORD(s_sharedFixedWidth), newFixedWidth); break;
+        case SHAREPOINT_COL_WEBURL_ID: s_webUrlFixedWidth = MAKELONG(LOWORD(s_webUrlFixedWidth), newFixedWidth); break;
+        }
+    }
+}
+
+void WINAPI CSharePointPluginDataInterface::ColumnWidthWasChanged(BOOL leftPanel, const CColumn* column, int newWidth)
+{
+    if (!column) return;
+    if (leftPanel)
+    {
+        switch (column->CustomData)
+        {
+        case SHAREPOINT_COL_AUTHOR_ID: s_authorWidth = MAKELONG(newWidth, HIWORD(s_authorWidth)); break;
+        case SHAREPOINT_COL_MODIFIED_BY_ID: s_modifiedByWidth = MAKELONG(newWidth, HIWORD(s_modifiedByWidth)); break;
+        case SHAREPOINT_COL_SHARED_ID: s_sharedWidth = MAKELONG(newWidth, HIWORD(s_sharedWidth)); break;
+        case SHAREPOINT_COL_WEBURL_ID: s_webUrlWidth = MAKELONG(newWidth, HIWORD(s_webUrlWidth)); break;
+        }
+    }
+    else
+    {
+        switch (column->CustomData)
+        {
+        case SHAREPOINT_COL_AUTHOR_ID: s_authorWidth = MAKELONG(LOWORD(s_authorWidth), newWidth); break;
+        case SHAREPOINT_COL_MODIFIED_BY_ID: s_modifiedByWidth = MAKELONG(LOWORD(s_modifiedByWidth), newWidth); break;
+        case SHAREPOINT_COL_SHARED_ID: s_sharedWidth = MAKELONG(LOWORD(s_sharedWidth), newWidth); break;
+        case SHAREPOINT_COL_WEBURL_ID: s_webUrlWidth = MAKELONG(LOWORD(s_webUrlWidth), newWidth); break;
+        }
+    }
+}
+
+BOOL WINAPI CPluginFS::GetCurrentPath(char* userPart)
+{
+    if (!userPart) return FALSE;
+    strncpy(userPart, m_currentPath.c_str(), MAX_PATH - 1);
+    userPart[MAX_PATH - 1] = '\0';
+    return TRUE;
+}
+
+BOOL WINAPI CPluginFS::GetFullName(CFileData& file, int isDir, char* buf, int bufSize)
+{
+    if (!buf || bufSize <= 0) return FALSE;
+
+    std::string path;
+    if (m_currentPath.empty() || m_currentPath == "\\")
+    {
+        path = "\\" + std::string(file.Name ? file.Name : "");
+    }
+    else
+    {
+        if (isDir == 2) // ".."
+        {
+            size_t slashPos = m_currentPath.rfind('\\');
+            if (slashPos == std::string::npos || slashPos == 0)
+                path = "\\";
+            else
+                path = m_currentPath.substr(0, slashPos);
+        }
+        else
+        {
+            path = m_currentPath;
+            if (path.back() != '\\') path += "\\";
+            path += (file.Name ? file.Name : "");
+        }
+    }
+
+    strncpy(buf, path.c_str(), bufSize - 1);
+    buf[bufSize - 1] = '\0';
+    return TRUE;
+}
+
+BOOL WINAPI CPluginFS::GetFullFSPath(HWND parent, const char* fsName, char* path, int pathSize, BOOL& success)
+{
+    if (!path || pathSize <= 0)
+    {
+        success = FALSE;
+        return FALSE;
+    }
+
+    std::string inputPath = path;
+    std::string resultPath;
+
+    if (inputPath.rfind("sharepoint:", 0) == 0)
+    {
+        resultPath = inputPath;
+    }
+    else if (!inputPath.empty() && inputPath[0] == '\\')
+    {
+        resultPath = std::string(fsName && *fsName ? fsName : AssignedFSName) + ":" + inputPath;
+    }
+    else
+    {
+        std::string cur = m_currentPath;
+        if (cur.empty() || cur.back() != '\\') cur += "\\";
+        resultPath = std::string(fsName && *fsName ? fsName : AssignedFSName) + ":" + cur + inputPath;
+    }
+
+    lstrcpynA(path, resultPath.c_str(), pathSize);
+    success = TRUE;
+    return TRUE;
+}
+
+BOOL WINAPI CPluginFS::GetRootPath(char* userPart)
+{
+    if (!userPart) return FALSE;
+    strcpy(userPart, "\\");
+    return TRUE;
+}
+
+BOOL WINAPI CPluginFS::IsCurrentPath(int currentFSNameIndex, int fsNameIndex, const char* userPart)
+{
+    if (currentFSNameIndex != fsNameIndex) return FALSE;
+    return SalamanderGeneral->IsTheSamePath(m_currentPath.c_str(), userPart ? userPart : "\\");
+}
+
+BOOL WINAPI CPluginFS::IsOurPath(int currentFSNameIndex, int fsNameIndex, const char* userPart)
+{
+    return currentFSNameIndex == fsNameIndex;
+}
+
+BOOL WINAPI CPluginFS::ChangePath(int currentFSNameIndex, char* fsName, int fsNameIndex,
+                                  const char* userPart, char* cutFileName, BOOL* pathWasCut,
+                                  BOOL forceRefresh, int mode)
+{
+    std::string target = (userPart && *userPart) ? userPart : "\\";
+    if (target.empty() || target[0] != '\\') target = "\\" + target;
+
+    if (target.length() > 1 && target.back() == '\\') target.pop_back();
+
+    m_currentPath = target;
+    return TRUE;
+}
+
+bool CPluginFS::ResolveCurrentTarget(std::string& outDriveId, std::string& outFolderItemId, std::string& outSiteId)
+{
+    std::lock_guard<std::mutex> lock(s_pathMapMutex);
+    outDriveId.clear();
+    outFolderItemId.clear();
+    outSiteId.clear();
+
+    auto itD = s_pathToDriveMap.find(m_currentPath);
+    if (itD != s_pathToDriveMap.end()) outDriveId = itD->second;
+
+    auto itI = s_pathToIdMap.find(m_currentPath);
+    if (itI != s_pathToIdMap.end()) outFolderItemId = itI->second;
+
+    auto itS = s_pathToSiteMap.find(m_currentPath);
+    if (itS != s_pathToSiteMap.end()) outSiteId = itS->second;
+
+    return !outDriveId.empty() || !outFolderItemId.empty() || !outSiteId.empty();
+}
+
+std::string CPluginFS::FindItemByPanelName(const char* name, BOOL isDir)
+{
+    if (!name) return "";
+    for (const auto& item : m_currentItems)
+    {
+        if (item.isFolder == (isDir != FALSE) && _stricmp(item.name.c_str(), name) == 0)
+        {
+            return item.id;
+        }
+    }
+    return "";
+}
+
+BOOL WINAPI CPluginFS::ListCurrentPath(CSalamanderDirectoryAbstract* dir,
+                                       CPluginDataInterfaceAbstract*& pluginData,
+                                       int& iconsType, BOOL forceRefresh)
+{
+    if (!dir) return FALSE;
+    pluginData = &s_pluginDataInterface;
+    iconsType = 0; // standard extension icons
+
+    m_currentItems.clear();
+    auto& cache = SharePointCache::CacheManager::GetInstance();
+    auto& api = SharePointApi::ApiClient::GetInstance();
+
+    std::string cur = m_currentPath;
+    if (cur.empty() || cur == "\\")
+    {
+        SharePointApi::SharePointItem oneDrive;
+        oneDrive.id = "onedrive_root";
+        oneDrive.name = kOneDriveDir;
+        oneDrive.isFolder = true;
+        oneDrive.isOneDrive = true;
+        m_currentItems.push_back(oneDrive);
+
+        SharePointApi::SharePointItem sites;
+        sites.id = "sites_root";
+        sites.name = kSitesDir;
+        sites.isFolder = true;
+        sites.isSite = true;
+        m_currentItems.push_back(sites);
+
+        SharePointApi::SharePointItem sharedWithMe;
+        sharedWithMe.id = "shared_with_me";
+        sharedWithMe.name = kSharedWithMeDir;
+        sharedWithMe.isFolder = true;
+        sharedWithMe.isShared = true;
+        m_currentItems.push_back(sharedWithMe);
+
+        SharePointApi::SharePointItem recent;
+        recent.id = "recent";
+        recent.name = kRecentDir;
+        recent.isFolder = true;
+        m_currentItems.push_back(recent);
+
+        SharePointApi::SharePointItem trash;
+        trash.id = "trash";
+        trash.name = kTrashDir;
+        trash.isFolder = true;
+        trash.isTrashed = true;
+        m_currentItems.push_back(trash);
+    }
+    else if (_stricmp(cur.c_str(), "\\Sites") == 0)
+    {
+        std::vector<SharePointApi::SharePointItem> sites;
+        if (!forceRefresh && cache.GetFolder("sites", sites))
+        {
+            m_currentItems = sites;
+        }
+        else
+        {
+            std::string err;
+            if (api.ListSites(sites, &err))
+            {
+                m_currentItems = sites;
+                cache.PutFolder("sites", sites);
+            }
+            else
+            {
+                SalamanderGeneral->SalMessageBox(NULL, err.c_str(), LoadStr(IDS_PLUGINNAME), MB_OK | MB_ICONERROR);
+                return FALSE;
+            }
+        }
+    }
+    else if (_stricmp(cur.c_str(), "\\Shared with me") == 0)
+    {
+        std::vector<SharePointApi::SharePointItem> items;
+        if (!forceRefresh && cache.GetFolder("sharedWithMe", items))
+        {
+            m_currentItems = items;
+        }
+        else
+        {
+            std::string err;
+            if (api.ListSharedWithMe(items, &err))
+            {
+                m_currentItems = items;
+                cache.PutFolder("sharedWithMe", items);
+            }
+            else
+            {
+                SalamanderGeneral->SalMessageBox(NULL, err.c_str(), LoadStr(IDS_PLUGINNAME), MB_OK | MB_ICONERROR);
+                return FALSE;
+            }
+        }
+    }
+    else if (_stricmp(cur.c_str(), "\\Recent") == 0)
+    {
+        std::vector<SharePointApi::SharePointItem> items;
+        if (!forceRefresh && cache.GetFolder("recent", items))
+        {
+            m_currentItems = items;
+        }
+        else
+        {
+            std::string err;
+            if (api.ListRecent(items, &err))
+            {
+                m_currentItems = items;
+                cache.PutFolder("recent", items);
+            }
+            else
+            {
+                SalamanderGeneral->SalMessageBox(NULL, err.c_str(), LoadStr(IDS_PLUGINNAME), MB_OK | MB_ICONERROR);
+                return FALSE;
+            }
+        }
+    }
+    else if (_stricmp(cur.c_str(), "\\OneDrive") == 0)
+    {
+        std::vector<SharePointApi::SharePointItem> items;
+        if (!forceRefresh && cache.GetFolder("onedrive:root", items))
+        {
+            m_currentItems = items;
+        }
+        else
+        {
+            std::string err;
+            if (api.ListOneDriveRoot(items, &err))
+            {
+                m_currentItems = items;
+                cache.PutFolder("onedrive:root", items);
+            }
+            else
+            {
+                SalamanderGeneral->SalMessageBox(NULL, err.c_str(), LoadStr(IDS_PLUGINNAME), MB_OK | MB_ICONERROR);
+                return FALSE;
+            }
+        }
+    }
+    else
+    {
+        std::string driveId, folderItemId, siteId;
+        ResolveCurrentTarget(driveId, folderItemId, siteId);
+
+        if (driveId.empty() && !siteId.empty())
+        {
+            std::vector<SharePointApi::SharePointItem> drives;
+            std::string cacheKey = "site:" + siteId;
+            if (!forceRefresh && cache.GetFolder(cacheKey, drives))
+            {
+                m_currentItems = drives;
+            }
+            else
+            {
+                std::string err;
+                if (api.ListSiteDrives(siteId, drives, &err))
+                {
+                    m_currentItems = drives;
+                    cache.PutFolder(cacheKey, drives);
+                }
+                else
+                {
+                    SalamanderGeneral->SalMessageBox(NULL, err.c_str(), LoadStr(IDS_PLUGINNAME), MB_OK | MB_ICONERROR);
+                    return FALSE;
+                }
+            }
+        }
+        else
+        {
+            if (driveId.empty() && cur.rfind("\\OneDrive", 0) == 0) driveId = "me";
+
+            std::string cacheKey = "drive:" + driveId + ":folder:" + (folderItemId.empty() ? "root" : folderItemId);
+            std::vector<SharePointApi::SharePointItem> items;
+
+            if (!forceRefresh && cache.GetFolder(cacheKey, items))
+            {
+                m_currentItems = items;
+            }
+            else
+            {
+                std::string err;
+                if (api.ListDriveChildren(driveId, folderItemId, items, &err))
+                {
+                    m_currentItems = items;
+                    cache.PutFolder(cacheKey, items);
+                }
+                else
+                {
+                    SalamanderGeneral->SalMessageBox(NULL, err.c_str(), LoadStr(IDS_PLUGINNAME), MB_OK | MB_ICONERROR);
+                    return FALSE;
+                }
+            }
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(s_pathMapMutex);
+        for (const auto& item : m_currentItems)
+        {
+            std::string subPath = cur;
+            if (subPath.empty() || subPath.back() != '\\') subPath += "\\";
+            subPath += item.name;
+
+            s_pathToIdMap[subPath] = item.id;
+            if (!item.driveId.empty()) s_pathToDriveMap[subPath] = item.driveId;
+            if (!item.siteId.empty()) s_pathToSiteMap[subPath] = item.siteId;
+        }
+    }
+
+    for (const auto& item : m_currentItems)
+    {
+        CFileData file;
+        file.Name = const_cast<char*>(item.name.c_str());
+        file.NameLen = (int)item.name.length();
+
+        const char* pDot = strrchr(file.Name, '.');
+        file.Ext = (pDot != NULL && !item.isFolder) ? const_cast<char*>(pDot + 1) : file.Name + file.NameLen;
+
+        file.Size.SetUI64((unsigned __int64)(item.size < 0 ? 0 : item.size));
+        file.SizeValid = item.isFolder ? 0 : 1;
+        file.LastWrite = item.modifiedTime;
+        file.Attr = item.isFolder ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
+        file.DosName = NULL;
+
+        SharePointPluginData* pd = new SharePointPluginData();
+        pd->id = item.id;
+        pd->driveId = item.driveId;
+        pd->siteId = item.siteId;
+        pd->authorName = item.authorName;
+        pd->lastModifyingUserName = item.lastModifyingUserName;
+        pd->webUrl = item.webUrl;
+        pd->isShared = item.isShared;
+        file.PluginData = reinterpret_cast<DWORD_PTR>(pd);
+        file.IconOverlayIndex = ICONOVERLAYINDEX_NOTUSED;
+
+        if (item.isFolder)
+        {
+            dir->AddDir(NULL, file, pluginData);
+        }
+        else
+        {
+            dir->AddFile(NULL, file, pluginData);
+        }
+    }
+
+    return TRUE;
+}
