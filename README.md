@@ -77,20 +77,41 @@ A full-featured filesystem, management, and viewer plugin for **Open Salamander*
 
 ---
 
-## ⚙️ Microsoft Azure AD / Entra ID App Registration
+## ⚙️ Authentication & Microsoft Account Setup (Azure Entra ID)
 
-To connect to your SharePoint and OneDrive storage:
+The plugin supports both **Personal Microsoft Accounts (OneDrive)** and **Work/School Microsoft 365 Accounts (SharePoint Online & OneDrive for Business)**.
+
+### 🔑 Selecting Tenant ID in Plugin Configuration:
+In the configuration dialog (*Plugins → Microsoft SharePoint → Configuration...*), set the Tenant ID according to your account type:
+- **`consumers`** – **For Personal Accounts (@outlook.com, @hotmail.com, @live.com, personal OneDrive)**:
+  - Does **NOT** require any paid SharePoint license. Accesses your personal OneDrive directly.
+- **`organizations`** – For any Microsoft 365 Work or School account.
+- **`common`** – Universal mode allowing sign-in with either personal or organizational accounts.
+- **`<specific-tenant-guid>`** – Specific Azure AD / Entra ID tenant ID of your organization.
+
+---
+
+### 📋 Custom Azure Entra ID App Registration (Client ID):
+
+If configuring your own `Client ID`:
 1. Go to [Microsoft Entra admin center / Azure Portal](https://portal.azure.com/).
 2. Navigate to **App registrations → New registration**.
-3. Set Supported account types to **Accounts in any organizational directory and personal Microsoft accounts** (or single tenant if restricted).
-4. In **Authentication**, add a **Mobile and desktop applications** platform with redirect URI: `http://localhost`.
+3. Set **Supported account types** to **Accounts in any organizational directory and personal Microsoft accounts** *(Multitenant + Personal)*.
+4. In **Authentication**:
+   - Add platform **Mobile and desktop applications**.
+   - Check redirect URI: **`http://localhost`**.
+   - Set **Allow public client flows** to **Yes**.
 5. Under **API permissions**, add delegated permissions for **Microsoft Graph**:
    - `offline_access`
    - `Files.ReadWrite.All`
    - `Sites.ReadWrite.All`
    - `User.Read`
-6. Copy the **Application (client) ID** and optionally your **Directory (tenant) ID**.
-7. Enter them in the plugin configuration dialog and click **Add Account...**.
+6. Copy the **Application (client) ID**.
+7. Enter it in the plugin configuration dialog, choose the corresponding **Tenant ID** (`consumers` for personal, `common` or `organizations` for work), and click **Add Account...**.
+
+> [!NOTE]
+> **"Tenant does not have a SPO license" Error:**
+> If you sign in with an organizational account in a tenant without an active **SharePoint Online (SPO)** license (e.g. a free Azure AD tenant without Microsoft 365 plans), Microsoft Graph will reject OneDrive and Sites operations. For free personal usage without a SharePoint license, set Tenant ID to `consumers`.
 
 ---
 

@@ -77,20 +77,42 @@ Plnohodnotný souborový plugin pro správce souborů **Open Salamander** (a Dar
 
 ---
 
-## ⚙️ Registrace aplikace v Microsoft Azure AD / Entra ID
+## ⚙️ Přihlášení a nastavení Microsoft účtu (Azure Entra ID)
 
-Pro připojení k vašemu SharePointu a OneDrivu:
+Plugin podporuje jak **osobní účty Microsoft (OneDrive)**, tak **firemní/školní účty Microsoft 365 (SharePoint Online & OneDrive for Business)**.
+
+### 🔑 Jaké zvolit Tenant ID v konfiguraci pluginu:
+V dialogu konfigurace (*Plugins → Microsoft SharePoint → Nastavení...*) zvolte Tenant ID podle typu vašeho účtu:
+- **`consumers`** – **Pro osobní účty (@outlook.com, @hotmail.com, @live.com, osobní OneDrive)**:
+  - Nevyžaduje **žádnou placenou licenci SharePointu**. Přistupuje přímo k vašemu osobnímu disku OneDrive.
+- **`organizations`** – Pro libovolný firemní nebo školní účet Microsoft 365.
+- **`common`** – Univerzální režim umožňující přihlášení jak osobním, tak firemním účtem.
+- **`<konkrétní GUID tenanta>`** – Specifické ID vaší firemní organizace v Azure AD / Entra ID.
+
+---
+
+### 📋 Vytvoření vlastní registrace aplikace v Azure Entra ID (Client ID):
+
+Pokud používáte vlastní `Client ID`:
 1. Přejděte do [Microsoft Entra admin center / Azure Portal](https://portal.azure.com/).
 2. Otevřete **Registrace aplikací (App registrations) → Nová registrace (New registration)**.
-3. Jako podporované typy účtů zvolte **Účty v libovolném organizačním adresáři a osobní účty Microsoft** (případně pouze pro vaši organizaci).
-4. V sekci **Ověřování (Authentication)** přidejte platformu **Mobilní a desktopové aplikace (Mobile and desktop applications)** s URI pro přesměrování: `http://localhost`.
+3. Jako **Podporované typy účtů (Supported account types)** zvolte:
+   - **Účty v libovolném organizačním adresáři a osobní účty Microsoft** *(Accounts in any organizational directory and personal Microsoft accounts - Multitenant + Personal)* – toto umožní přihlášení jakýmkoliv účtem (osobním i firemním).
+4. V sekci **Ověřování (Authentication)**:
+   - Přidejte platformu **Mobilní a desktopové aplikace (Mobile and desktop applications)**.
+   - Jako URI pro přesměrování zaškrtněte: **`http://localhost`**.
+   - Nastavte **Povolit toky veřejného klienta (Allow public client flows)** na **Ano (Yes)**.
 5. V sekci **Oprávnění rozhraní API (API permissions)** přidejte delegovaná oprávnění pro **Microsoft Graph**:
    - `offline_access`
    - `Files.ReadWrite.All`
-   - `Sites.ReadWrite.All`
+   - `Sites.ReadWrite.All` (pro SharePoint weby)
    - `User.Read`
-6. Zkopírujte **ID aplikace (klienta)** a případně **ID adresáře (tenanta)**.
-7. V Open Salamanderu otevřete **Plugins → Microsoft SharePoint → Nastavení...**, vložte údaje a klikněte na **Přidat účet...**.
+6. Zkopírujte **ID aplikace (klienta)** (Client ID).
+7. V Open Salamanderu otevřete **Plugins → Microsoft SharePoint → Nastavení...**, vložte **Client ID**, zvolte odpovídající **Tenant ID** (`consumers` pro osobní účet, `common` nebo `organizations` pro firemní) a klikněte na **Přidat účet...**.
+
+> [!NOTE]
+> **Chyba "Tenant does not have a SPO license":**
+> Pokud se pokusíte otevřít složku `OneDrive` nebo `Sites` pod firemním účtem v organizaci, která nemá zakoupenou nebo přiřazenou licenci pro **SharePoint Online (SPO)** (např. účet existuje pouze v bezplatném Azure AD bez Microsoft 365), Graph API tuto operaci odmítne. Pro bezplatné použití s osobním účtem nastavte Tenant ID na `consumers`.
 
 ---
 
