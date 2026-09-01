@@ -444,7 +444,7 @@ bool AuthManager::LaunchInteractiveAuth(HWND hParent, std::string* errorOut)
     std::string codeVerifier = GenerateRandomString(64);
     std::string codeChallenge = ComputePkceChallenge(codeVerifier);
     std::string state = GenerateRandomString(32);
-    std::string redirectUri = "http://localhost:" + std::to_string(port) + "/callback";
+    std::string redirectUri = "http://localhost:" + std::to_string(port);
 
     std::string authUrl = "https://login.microsoftonline.com/" + tenantId + "/oauth2/v2.0/authorize"
                           "?client_id=" + SharePointHttp::HttpClient::UrlEncode(clientId) +
@@ -492,35 +492,31 @@ bool AuthManager::LaunchInteractiveAuth(HWND hParent, std::string* errorOut)
                 if (bytesRead > 0)
                 {
                     std::string req(reqBuf, bytesRead);
-                    size_t queryPos = req.find("GET /callback?");
-                    if (queryPos == std::string::npos) queryPos = req.find("GET /?");
+                    size_t qmark = req.find('?');
+                    size_t endPos = req.find(" HTTP/", qmark != std::string::npos ? qmark : 0);
 
-                    if (queryPos != std::string::npos)
+                    if (qmark != std::string::npos && endPos != std::string::npos && endPos > qmark)
                     {
-                        size_t endPos = req.find(" HTTP/", queryPos);
-                        if (endPos != std::string::npos)
+                        std::string query = req.substr(qmark + 1, endPos - (qmark + 1));
+                        std::stringstream ss(query);
+                        std::string param;
+                        std::string recvState;
+
+                        while (std::getline(ss, param, '&'))
                         {
-                            std::string query = req.substr(queryPos + 14, endPos - (queryPos + 14));
-                            std::stringstream ss(query);
-                            std::string param;
-                            std::string recvState;
-
-                            while (std::getline(ss, param, '&'))
+                            size_t eq = param.find('=');
+                            if (eq != std::string::npos)
                             {
-                                size_t eq = param.find('=');
-                                if (eq != std::string::npos)
-                                {
-                                    std::string key = param.substr(0, eq);
-                                    std::string val = UrlDecode(param.substr(eq + 1));
-                                    if (key == "code") authCode = val;
-                                    else if (key == "state") recvState = val;
-                                }
+                                std::string key = param.substr(0, eq);
+                                std::string val = UrlDecode(param.substr(eq + 1));
+                                if (key == "code") authCode = val;
+                                else if (key == "state") recvState = val;
                             }
+                        }
 
-                            if (!authCode.empty() && recvState == state)
-                            {
-                                received = true;
-                            }
+                        if (!authCode.empty() && recvState == state)
+                        {
+                            received = true;
                         }
                     }
 
