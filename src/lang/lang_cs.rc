@@ -183,4 +183,6 @@ BEGIN
     IDS_FIND_LOOKIN_ALL     "Celý SharePoint / OneDrive"
 END
 
+#include "lang_cs.rc2"
+
 #endif // Czech resources

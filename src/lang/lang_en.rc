@@ -183,4 +183,6 @@ BEGIN
     IDS_FIND_LOOKIN_ALL     "Entire SharePoint / OneDrive"
 END
 
+#include "lang_en.rc2"
+
 #endif // English resources
