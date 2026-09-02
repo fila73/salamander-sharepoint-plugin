@@ -86,3 +86,9 @@ Chronologický přehled dokončených prací, implementačních kroků a vyřeš
   - Při selhání stahování se nejdříve zavolá `progressDlg->Close()`, čímž se rodičovské okno reaktivuje a získá fokus.
   - Nastaveno `cancelOrHandlePath = TRUE;` a vráceno `TRUE;`, takže Salamander ví, že operace skončila chybou/stornem a nepokouší se o dodatečné operace s neexistujícími soubory.
 
+### 10. Oprava pádu po dokončení kopírování (Heap Corruption 0xC0000374 v CTransferProgressDialog)
+- **Problém**: Po dokončení přenosu souborů došlo k pádu aplikace (`STATUS_HEAP_CORRUPTION 0xC0000374`).
+- **Příčina**: Třída `CTransferProgressDialog` dědila z `CCommonDialog` / `CDialog` / `CWindowsObject` (`winliblt`). Tyto třídy Open Salamander frameworku interně spravují životní cyklus oken a paměti (`ooDynamic` / `ooStandard`), což při ručním řízení paměti a volání `delete` v destruktoru `CDialogTransferProgress::Close()` vedlo ke kolizi alokátorů a poškození haldy.
+- **Řešení**: `CTransferProgressDialog` byl plně osamostatněn od tříd `CCommonDialog`/`CDialog` a přepsán na čisté nativní Win32 `CreateDialogParamA` / `DestroyWindow` s bezpečným předáním `this` přes `GWLP_USERDATA` (obdobně jako `CSharePointFindDialog`), což garantuje 100% stabilitu haldy.
+
+

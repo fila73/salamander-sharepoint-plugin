@@ -19,6 +19,12 @@
 2. **Nekorektní návratový stav `cancelOrHandlePath`**:
    - `CopyOrMoveFromFS` po zobrazení chyby vrátil `return TRUE;` s `cancelOrHandlePath = FALSE;`. Salamander to vyhodnotil tak, že soubor byl úspěšně stažen na disk a pokusil se pracovat s neexistujícím lokálním souborem, což vedlo k pádu.
 
+### C. Pád po dokončení kopírování (Heap Corruption 0xC0000374 v `CTransferProgressDialog`)
+1. **Kolize správy haldy ve frameworku `winliblt`**:
+   - `CTransferProgressDialog` dědil z `CCommonDialog` / `CDialog` / `CWindowsObject`.
+   - Modeless okna vytvořená přes `CDialog::Create()` v kombinaci s `new` / `std::unique_ptr` a následným `delete` / `DestroyWindow` vyvolávala konflikt v `CWindowsObject` alokátoru, což vedlo k chybě `STATUS_HEAP_CORRUPTION (0xC0000374)`.
+   - Řešením bylo přepsání `CTransferProgressDialog` na čistý Win32 dialog (`CreateDialogParamA` / `DestroyWindow` / `GWLP_USERDATA`).
+
 ---
 
 ## 2. Plánované kroky implementace
@@ -40,9 +46,11 @@
      - Vyřešit `driveId` pomocí `ResolveCurrentTarget`.
      - Použít `FindItemObjectByPanelName` pro předání kompletních metadat.
      - Při chybě stahování nejdříve uzavřít `progressDlg->Close()`, zobrazit `SalMessageBox`, nastavit `cancelOrHandlePath = TRUE;` a vrátit `TRUE;`.
-5. **Kompilace a testování**:
+5. **`src/dialogs.h` & `src/dialogs.cpp`**:
+   - Přepsat `CTransferProgressDialog` na samostatnou Win32 třídu bez závislosti na `CCommonDialog`/`CDialog` a předejít tak poškození haldy (0xC0000374).
+6. **Kompilace a testování**:
    - Sestavit plugin pomocí `mingw32-make -f Makefile.mingw`.
    - Zkontrolovat úspěšnost kompilace a vytvoření `sharepoint.spl`, `english.slg`, `czech.slg`.
-6. **Aktualizace dokumentace a záznam do gitu**:
+7. **Aktualizace dokumentace a záznam do gitu**:
    - Aktualizovat `jobs_done.md`, `PLUGIN_DEV.md`, `README.md`, `README_CZ.md`, `implementation_plan.md`.
    - Provést git commit.

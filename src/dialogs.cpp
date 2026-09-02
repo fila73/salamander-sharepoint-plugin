@@ -409,7 +409,8 @@ CConfigDialog::CConfigDialog(HWND parent)
 //
 
 CTransferProgressDialog::CTransferProgressDialog(HWND hParent, bool isDownload, const std::string& fileName, int64_t totalBytes)
-    : CCommonDialog(HLanguage, IDD_TRANSFER_PROGRESS, hParent),
+    : m_hParent(hParent),
+      m_hDlg(NULL),
       m_isDownload(isDownload),
       m_fileName(fileName),
       m_currentFileTotalBytes(totalBytes),
@@ -443,15 +444,40 @@ std::string CTransferProgressDialog::FormatSize(int64_t bytes)
     return buf;
 }
 
+INT_PTR CALLBACK CTransferProgressDialog::s_DialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    CTransferProgressDialog* pThis = nullptr;
+    if (uMsg == WM_INITDIALOG)
+    {
+        pThis = reinterpret_cast<CTransferProgressDialog*>(lParam);
+        SetWindowLongPtr(hDlg, GWLP_USERDATA, (LONG_PTR)pThis);
+        if (pThis) pThis->m_hDlg = hDlg;
+    }
+    else
+    {
+        pThis = reinterpret_cast<CTransferProgressDialog*>(GetWindowLongPtr(hDlg, GWLP_USERDATA));
+    }
+
+    if (pThis)
+    {
+        return pThis->DialogProc(uMsg, wParam, lParam);
+    }
+    return FALSE;
+}
+
 bool CTransferProgressDialog::Start()
 {
-    if (!Create()) return false;
+    HINSTANCE hInst = HLanguage ? HLanguage : DLLInstance;
+    m_hDlg = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_TRANSFER_PROGRESS), m_hParent, s_DialogProc, (LPARAM)this);
+    if (!m_hDlg) return false;
 
-    HWND hParent = Parent;
-    if (hParent) EnableWindow(hParent, FALSE);
+    if (m_hParent && IsWindow(m_hParent))
+    {
+        EnableWindow(m_hParent, FALSE);
+    }
 
-    ShowWindow(HWindow, SW_SHOW);
-    UpdateWindow(HWindow);
+    ShowWindow(m_hDlg, SW_SHOW);
+    UpdateWindow(m_hDlg);
 
     m_startTick = GetTickCount();
     m_lastUpdateTick = m_startTick;
@@ -460,17 +486,19 @@ bool CTransferProgressDialog::Start()
 
 void CTransferProgressDialog::Stop()
 {
-    if (HWindow)
+    if (m_hDlg && IsWindow(m_hDlg))
     {
-        HWND hParent = Parent;
-        if (hParent)
+        HWND hDlg = m_hDlg;
+        m_hDlg = NULL;
+        SetWindowLongPtr(hDlg, GWLP_USERDATA, 0);
+
+        if (m_hParent && IsWindow(m_hParent))
         {
-            EnableWindow(hParent, TRUE);
-            SetForegroundWindow(hParent);
-            SetFocus(hParent);
+            EnableWindow(m_hParent, TRUE);
+            SetForegroundWindow(m_hParent);
+            SetFocus(m_hParent);
         }
-        DestroyWindow(HWindow);
-        HWindow = NULL;
+        DestroyWindow(hDlg);
     }
 }
 
@@ -486,10 +514,10 @@ void CTransferProgressDialog::SetCurrentFile(const std::string& fileName, int64_
     m_currentFileTotalBytes = totalBytes;
     m_currentFileBytesTransferred = 0;
 
-    if (HWindow)
+    if (m_hDlg && IsWindow(m_hDlg))
     {
-        SetDlgItemTextA(HWindow, IDC_TRANSFER_FILENAME, fileName.c_str());
-        SendDlgItemMessage(HWindow, IDC_TRANSFER_PROGRESSBAR, PBM_SETPOS, 0, 0);
+        SetDlgItemTextA(m_hDlg, IDC_TRANSFER_FILENAME, fileName.c_str());
+        SendDlgItemMessage(m_hDlg, IDC_TRANSFER_PROGRESSBAR, PBM_SETPOS, 0, 0);
     }
 }
 
@@ -507,6 +535,10 @@ void CTransferProgressDialog::ProcessMessages()
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE)
         {
             m_cancelled = true;
+        }
+        if (m_hDlg && IsWindow(m_hDlg) && IsDialogMessage(m_hDlg, &msg))
+        {
+            continue;
         }
         TranslateMessage(&msg);
         DispatchMessage(&msg);
@@ -531,17 +563,17 @@ bool CTransferProgressDialog::OnProgress(int64_t bytesTransferred, int64_t total
 
 void CTransferProgressDialog::UpdateUI(int64_t bytesTransferred, int64_t totalBytes)
 {
-    if (!HWindow) return;
+    if (!m_hDlg || !IsWindow(m_hDlg)) return;
 
     if (totalBytes > 0)
     {
         int pct = (int)((bytesTransferred * 100) / totalBytes);
-        SendDlgItemMessage(HWindow, IDC_TRANSFER_PROGRESSBAR, PBM_SETPOS, pct, 0);
+        SendDlgItemMessage(m_hDlg, IDC_TRANSFER_PROGRESSBAR, PBM_SETPOS, pct, 0);
 
         char szBytes[128];
         snprintf(szBytes, sizeof(szBytes), LoadStr(IDS_TRANSFER_BYTES_FMT),
                  FormatSize(bytesTransferred).c_str(), FormatSize(totalBytes).c_str());
-        SetDlgItemTextA(HWindow, IDC_TRANSFER_BYTES, szBytes);
+        SetDlgItemTextA(m_hDlg, IDC_TRANSFER_BYTES, szBytes);
     }
 
     DWORD elapsed = GetTickCount() - m_startTick;
@@ -550,13 +582,29 @@ void CTransferProgressDialog::UpdateUI(int64_t bytesTransferred, int64_t totalBy
         double speed = (double)bytesTransferred / ((double)elapsed / 1000.0);
         char szSpeed[128];
         snprintf(szSpeed, sizeof(szSpeed), LoadStr(IDS_TRANSFER_SPEED_FMT), FormatSize((int64_t)speed).c_str());
-        SetDlgItemTextA(HWindow, IDC_TRANSFER_SPEED, szSpeed);
+        SetDlgItemTextA(m_hDlg, IDC_TRANSFER_SPEED, szSpeed);
     }
 }
 
 INT_PTR CTransferProgressDialog::DialogProc(UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-    if (uMsg == WM_COMMAND)
+    INT_PTR colorResult = 0;
+    if (SharePointDarkMode::HandleDialogColors(uMsg, wParam, lParam, &colorResult))
+    {
+        return colorResult;
+    }
+
+    if (uMsg == WM_INITDIALOG)
+    {
+        SharePointDarkMode::ApplyWindowTheme(m_hDlg);
+        if (m_hParent != NULL && IsWindow(m_hParent))
+        {
+            SalamanderGeneral->MultiMonCenterWindow(m_hDlg, m_hParent, TRUE);
+        }
+        SalamanderGUI->ArrangeHorizontalLines(m_hDlg);
+        return TRUE;
+    }
+    else if (uMsg == WM_COMMAND)
     {
         if (LOWORD(wParam) == IDCANCEL)
         {
@@ -564,7 +612,7 @@ INT_PTR CTransferProgressDialog::DialogProc(UINT uMsg, WPARAM wParam, LPARAM lPa
             return TRUE;
         }
     }
-    return CCommonDialog::DialogProc(uMsg, wParam, lParam);
+    return FALSE;
 }
 
 void OnConfiguration(HWND hParent)

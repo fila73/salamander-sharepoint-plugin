@@ -193,6 +193,11 @@ Cloudová úložiště mohou mít stejnojmenné položky. Panel Salamandera vyž
 - Při chybě je nutné **nejdříve** uzavřít dialog (`progressDlg->Close()`), který znovu povolí a aktivuje rodičovské okno, a teprve poté volat `SalMessageBox()`.
 - V `CopyOrMoveFromFS` i `CopyOrMoveFromDiskToFS` je při chybě nutné nastavit `cancelOrHandlePath = TRUE` a vrátit `TRUE`, aby Salamander nepokračoval ve zpracování neexistujících lokálních souborů (což způsobuje pád aplikace).
 
+### ⚠️ 8. Modeless dialogy a vyloučení třídy CCommonDialog / CDialog (Předcházení Heap Corruption 0xC0000374)
+- Třídy `CCommonDialog` a `CDialog` v `winliblt` jsou navrženy pro modální dialogy spouštěné pomocí `Execute()` (`DialogBoxParam`).
+- Pokud modeless dialog vytvořený přes `Create()` dědí z `CDialog` a je alokován pomocí `new` / `std::unique_ptr`, dochází při destrukci k internímu konfliktu správy haldy v `CWindowsObject` (`STATUS_HEAP_CORRUPTION 0xC0000374`).
+- Modeless dialogy (jako `CTransferProgressDialog` nebo `CSharePointFindDialog`) musí být implementovány jako samostatné třídy přímo s Win32 API (`CreateDialogParamA`, `DestroyWindow`) a ukazatelem `this` předávaným přes `GWLP_USERDATA`.
+
 ---
 
 ## 6. Sestavení ze zdrojových kódů (MinGW-w64)

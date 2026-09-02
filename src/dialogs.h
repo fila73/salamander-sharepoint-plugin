@@ -78,7 +78,7 @@ public:
     CConfigDialog(HWND parent);
 };
 
-class CTransferProgressDialog : public CCommonDialog
+class CTransferProgressDialog
 {
 public:
     CTransferProgressDialog(HWND hParent, bool isDownload, const std::string& fileName = "", int64_t totalBytes = 0);
@@ -94,12 +94,16 @@ public:
     bool IsCancelled() const { return m_cancelled; }
     void Cancel() { m_cancelled = true; }
 
+    HWND GetHWND() const { return m_hDlg; }
+
     static std::string FormatSize(int64_t bytes);
 
-protected:
-    virtual INT_PTR DialogProc(UINT uMsg, WPARAM wParam, LPARAM lParam) override;
-
 private:
+    static INT_PTR CALLBACK s_DialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+    INT_PTR DialogProc(UINT uMsg, WPARAM wParam, LPARAM lParam);
+
+    HWND m_hParent;
+    HWND m_hDlg;
     bool m_isDownload;
     std::string m_fileName;
     int64_t m_currentFileTotalBytes;
@@ -125,7 +129,7 @@ public:
     }
 
     CDialogTransferProgress(HWND hParent, bool isDownload)
-        : m_dlg(new CTransferProgressDialog(hParent, isDownload)),
+        : m_dlg(std::make_unique<CTransferProgressDialog>(hParent, isDownload)),
           m_cancelFlag(false)
     {
         m_dlg->Start();
@@ -186,13 +190,12 @@ public:
         if (m_dlg)
         {
             m_dlg->Stop();
-            delete m_dlg;
-            m_dlg = nullptr;
+            m_dlg.reset();
         }
     }
 
 private:
-    CTransferProgressDialog* m_dlg = nullptr;
+    std::unique_ptr<CTransferProgressDialog> m_dlg;
     bool m_cancelFlag = false;
     int m_totalItems = 0;
     int64_t m_totalBytes = 0;
