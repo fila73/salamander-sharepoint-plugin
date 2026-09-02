@@ -460,15 +460,21 @@ bool CPluginFS::ResolveCurrentTarget(std::string& outDriveId, std::string& outFo
 
 std::string CPluginFS::FindItemByPanelName(const char* name, BOOL isDir)
 {
-    if (!name) return "";
+    const auto* item = FindItemObjectByPanelName(name, isDir);
+    return item ? item->id : "";
+}
+
+const SharePointApi::SharePointItem* CPluginFS::FindItemObjectByPanelName(const char* name, BOOL isDir) const
+{
+    if (!name) return nullptr;
     for (const auto& item : m_currentItems)
     {
         if (item.isFolder == (isDir != FALSE) && _stricmp(item.name.c_str(), name) == 0)
         {
-            return item.id;
+            return &item;
         }
     }
-    return "";
+    return nullptr;
 }
 
 BOOL WINAPI CPluginFS::ListCurrentPath(CSalamanderDirectoryAbstract* dir,

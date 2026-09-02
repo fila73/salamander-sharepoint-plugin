@@ -183,6 +183,16 @@ Při stisknutí Storno uživatelem nastavit `*cancelOrHandlePath = TRUE` a vrát
 ### ⚠️ 5. Disambiguace duplicitních názvů v jedné složce
 Cloudová úložiště mohou mít stejnojmenné položky. Panel Salamandera vyžaduje unikátní názvy. Plugin automaticky připojuje suffix s ID (např. `Dokument [a8F2k1].docx`).
 
+### ⚠️ 6. Zákaz hlavičky Authorization: Bearer pro přímé Download URL (Chyba 401)
+- `@microsoft.graph.downloadUrl` i přesměrované URL z Graph endpointu `/content` (302 Found) směřují na pre-autentizované CDN/storage servery.
+- Odeslání hlavičky `Authorization: Bearer <token>` na tyto servery způsobí chybu `401 Unauthorized`.
+- Při volání Graph endpointu `/content` je nutné zakázat automatické redirecty (`WINHTTP_OPTION_REDIRECT_POLICY_NEVER`), zachytit `302 Found`, vyčíst cílovou adresu z hlavičky `Location:` a provést stažení bez autorizační hlavičky.
+
+### ⚠️ 7. Životní cyklus Progress dialogu a cancelOrHandlePath při chybě přenosu
+- Během stahování/nahrávání `CTransferProgressDialog` zakáže rodičovské okno (`EnableWindow(Parent, FALSE)`).
+- Při chybě je nutné **nejdříve** uzavřít dialog (`progressDlg->Close()`), který znovu povolí a aktivuje rodičovské okno, a teprve poté volat `SalMessageBox()`.
+- V `CopyOrMoveFromFS` i `CopyOrMoveFromDiskToFS` je při chybě nutné nastavit `cancelOrHandlePath = TRUE` a vrátit `TRUE`, aby Salamander nepokračoval ve zpracování neexistujících lokálních souborů (což způsobuje pád aplikace).
+
 ---
 
 ## 6. Sestavení ze zdrojových kódů (MinGW-w64)

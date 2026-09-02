@@ -577,19 +577,33 @@ bool ApiClient::DownloadFile(const SharePointItem& item,
                              const bool* cancelFlag,
                              std::string* errorOut)
 {
+    SharePointHttp::HttpClient http;
+
+    // 1. If item has pre-authenticated download URL, try direct download without bearer token
+    if (!item.downloadUrl.empty())
+    {
+        std::string directErr;
+        if (http.DownloadToFile(item.downloadUrl, targetLocalPath, "", progressCallback, cancelFlag, &directErr))
+        {
+            return true;
+        }
+
+        if (cancelFlag && *cancelFlag)
+        {
+            if (errorOut) *errorOut = directErr;
+            return false;
+        }
+    }
+
+    // 2. Fallback to Graph API /content endpoint with bearer token
     std::string token = SharePointAuth::AuthManager::GetInstance().GetValidAccessToken(errorOut);
     if (token.empty()) return false;
 
-    SharePointHttp::HttpClient http;
-    std::string url = item.downloadUrl;
-
-    if (url.empty())
-    {
-        if (item.driveId == "me" || item.driveId.empty())
-            url = "https://graph.microsoft.com/v1.0/me/drive/items/" + item.id + "/content";
-        else
-            url = "https://graph.microsoft.com/v1.0/drives/" + item.driveId + "/items/" + item.id + "/content";
-    }
+    std::string url;
+    if (item.driveId == "me" || item.driveId.empty())
+        url = "https://graph.microsoft.com/v1.0/me/drive/items/" + item.id + "/content";
+    else
+        url = "https://graph.microsoft.com/v1.0/drives/" + item.driveId + "/items/" + item.id + "/content";
 
     return http.DownloadToFile(url, targetLocalPath, token, progressCallback, cancelFlag, errorOut);
 }

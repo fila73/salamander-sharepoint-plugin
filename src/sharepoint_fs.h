@@ -199,6 +199,7 @@ public:
     bool ResolveCurrentTarget(std::string& outDriveId, std::string& outFolderItemId, std::string& outSiteId);
     std::string GetCurrentPathStr() const { return m_currentPath; }
     std::string FindItemByPanelName(const char* name, BOOL isDir);
+    const SharePointApi::SharePointItem* FindItemObjectByPanelName(const char* name, BOOL isDir) const;
 
 private:
     std::string m_fsName;

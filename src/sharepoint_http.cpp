@@ -308,8 +308,17 @@ bool HttpClient::DownloadToFile(const std::string& url,
         return false;
     }
 
+    // Determine whether this request is aimed at Microsoft Graph API or direct storage
+    std::wstring wHost(hostName);
+    bool isGraphEndpoint = (wHost.find(L"graph.microsoft.com") != std::wstring::npos);
+
+    // Disable automatic redirects on Graph API requests so we can inspect the 302 and follow it without bearer token
+    DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+    WinHttpSetOption(hRequest, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
+
     std::wstring headers;
-    if (!bearerToken.empty())
+    // Only pass Bearer token to Graph endpoints; direct storage download URLs are pre-signed and will return 401 if token is passed
+    if (!bearerToken.empty() && isGraphEndpoint)
     {
         headers += L"Authorization: Bearer " + Utf8ToWide(bearerToken) + L"\r\n";
     }
@@ -327,6 +336,21 @@ bool HttpClient::DownloadToFile(const std::string& url,
     DWORD statusCodeSize = sizeof(statusCode);
     WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                         WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusCodeSize, WINHTTP_NO_HEADER_INDEX);
+
+    // If Graph API returned a redirect (302 Found or similar), follow the Location header without bearer token
+    if (statusCode == 301 || statusCode == 302 || statusCode == 303 || statusCode == 307 || statusCode == 308)
+    {
+        wchar_t location[4096] = {0};
+        DWORD locSize = sizeof(location);
+        if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_LOCATION, WINHTTP_HEADER_NAME_BY_INDEX,
+                                location, &locSize, WINHTTP_NO_HEADER_INDEX))
+        {
+            std::string redirectUrl = WideToUtf8(location);
+            WinHttpCloseHandle(hRequest);
+            WinHttpCloseHandle(hConnect);
+            return DownloadToFile(redirectUrl, targetLocalPath, "", progressCallback, cancelFlag, errorOut);
+        }
+    }
 
     if (statusCode < 200 || statusCode >= 300)
     {

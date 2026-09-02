@@ -6,12 +6,12 @@ RC = $(CROSS_COMPILE)windres
 SALAMAND_DIR = ../salamander-plugins/salamand
 SHARED_DIR = ../salamander-plugins/salamand/plugins/shared
 
-CXXFLAGS = -O2 -Wall -Wno-unknown-pragmas -Wno-unused-variable -Wno-unused-function -Wno-parentheses -std=c++17 \
+CXXFLAGS = -O2 -g -Wall -Wno-unknown-pragmas -Wno-unused-variable -Wno-unused-function -Wno-parentheses -std=c++17 \
     -DWIN32 -D_WIN32 -D_WINDOWS -D_USRDLL -DWINVER=0x0601 -D_WIN32_WINNT=0x0601 \
     -D_CRT_SECURE_NO_WARNINGS -DUNICODE_NOT_USED -D_FILE_OFFSET_BITS=64 \
     -Isrc -Isrc/lang -I$(SHARED_DIR) -I$(SALAMAND_DIR)
 
-LDFLAGS = -shared -s -static -static-libgcc -static-libstdc++ \
+LDFLAGS = -shared -g -Wl,-Map=sharepoint.map -static -static-libgcc -static-libstdc++ \
     -lwinhttp -lcrypt32 -lws2_32 -lshlwapi -lcomctl32 -lcomdlg32 -lole32 -lshell32 -lgdi32 -lmsimg32 -luxtheme -ldwmapi
 
 CPP_SRCS = \

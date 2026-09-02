@@ -60,3 +60,29 @@ Chronologický přehled dokončených prací, implementačních kroků a vyřeš
 - **Řešení**:
   - `ExecuteOnFS` a `GetFullName` sjednoceny na standardní SDK funkci `SalamanderGeneral->CutDirectory()`, která zkracuje cestu a vrací ukazatel na odříznutou podsložku (`cutDir`).
   - Tento název se předává do `ChangePanelPathToPluginFS(panel, pluginFSName, newPath, NULL, -1, cutDir)` – Salamander na ni automaticky a stabilně nastaví kurzor.
+
+---
+
+## 2026-09-02
+
+### 8. Oprava chyby 401 Unauthorized při stahování (F3 a F5)
+- **Problém**: Prohlížení složek fungovalo, ale při F3 (zobrazení souboru) i F5 (kopírování na lokální disk) vracel server chybu `401 Unauthorized`.
+- **Příčina**:
+  1. `item.downloadUrl` (`@microsoft.graph.downloadUrl`) je předem podepsaná URL směřující na SharePoint CDN / storage server. Odeslání hlavičky `Authorization: Bearer <token>` na tento server vyústí v `401 Unauthorized` (storage server odmítne Graph Bearer token).
+  2. Při volání Graph endpointu `/content` vrací Graph stav `302 Found` s přesměrováním na storage server. WinHTTP ve výchozím nastavení přeposílal Bearer token i po redirectu.
+  3. V `CPluginFS::Transfer` a `CPluginFS::ViewFile` se vytvářel neúplný `SharePointItem` bez `downloadUrl` a `driveId`.
+- **Řešení**:
+  - Přidána metoda `CPluginFS::FindItemObjectByPanelName()`, která načítá kompletní položku včetně `driveId` a `downloadUrl`.
+  - V `HttpClient::DownloadToFile` zavedeno rozlišení Graph API vs. přímá CDN URL – Bearer token se odesílá pouze na `graph.microsoft.com`.
+  - Pro Graph endpointy nastaveno `WINHTTP_OPTION_REDIRECT_POLICY_NEVER` a při zachycení 302/301/303/307 se cíl stahuje z `Location:` bez autorizační hlavičky.
+  - V `ApiClient::DownloadFile` se nejprve zkouší přímé rychlé stažení přes `item.downloadUrl` a teprve při neúspěchu/expiraci se volá Graph `/content` endpoint.
+
+### 9. Oprava pádu aplikace po odkliknutí chyby při kopírování (F5)
+- **Problém**: Pokud stahování selhalo (např. chyba 401), po odkliknutí chybové hlášky `SalMessageBox` došlo k pádu Salamanderu.
+- **Příčina**:
+  1. Modální progress dialog `CTransferProgressDialog::Start` zakázal okno rodiče (`EnableWindow(Parent, FALSE)`). `SalMessageBox` byl volán dříve, než byl progress dialog uzavřen a rodičovské okno opět povoleno.
+  2. `CopyOrMoveFromFS` po zobrazení chyby vrátil `return TRUE;` s `cancelOrHandlePath = FALSE;`. Salamander to chápal tak, že soubor byl úspěšně zkopírován a pokusil se načíst atributy neexistujícího souboru na disku.
+- **Řešení**:
+  - Při selhání stahování se nejdříve zavolá `progressDlg->Close()`, čímž se rodičovské okno reaktivuje a získá fokus.
+  - Nastaveno `cancelOrHandlePath = TRUE;` a vráceno `TRUE;`, takže Salamander ví, že operace skončila chybou/stornem a nepokouší se o dodatečné operace s neexistujícími soubory.
+

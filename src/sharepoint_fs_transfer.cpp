@@ -236,6 +236,10 @@ BOOL WINAPI CPluginFS::CopyOrMoveFromFS(BOOL copy, int mode, const char* fsName,
     if (!targetPath || !*targetPath) return FALSE;
     std::wstring wTargetDir = SharePointHttp::HttpClient::AnsiToWide(targetPath);
 
+    std::string driveId, folderItemId, siteId;
+    ResolveCurrentTarget(driveId, folderItemId, siteId);
+    if (driveId.empty() && m_currentPath.rfind("\\OneDrive", 0) == 0) driveId = "me";
+
     auto progressDlg = CDialogTransferProgress::Create(parent, true);
 
     BOOL focused = (selectedFiles == 0 && selectedDirs == 0);
@@ -275,14 +279,20 @@ BOOL WINAPI CPluginFS::CopyOrMoveFromFS(BOOL copy, int mode, const char* fsName,
         if (!isDir && f->Name)
         {
             std::string fileName = f->Name;
-            std::string itemId = FindItemByPanelName(f->Name, FALSE);
-            std::string driveId;
-
             SharePointApi::SharePointItem item;
-            item.id = itemId;
-            item.driveId = driveId;
-            item.name = fileName;
-            item.size = (int64_t)f->Size.Value;
+            const auto* pItem = FindItemObjectByPanelName(f->Name, FALSE);
+            if (pItem)
+            {
+                item = *pItem;
+                if (item.driveId.empty()) item.driveId = driveId;
+            }
+            else
+            {
+                item.id = FindItemByPanelName(f->Name, FALSE);
+                item.driveId = driveId;
+                item.name = fileName;
+                item.size = (int64_t)f->Size.Value;
+            }
 
             progressDlg->SetCurrentFileName(fileName);
 
@@ -306,12 +316,15 @@ BOOL WINAPI CPluginFS::CopyOrMoveFromFS(BOOL copy, int mode, const char* fsName,
 
                 if (!copy)
                 {
-                    SharePointApi::ApiClient::GetInstance().DeleteItem(driveId, itemId);
+                    SharePointApi::ApiClient::GetInstance().DeleteItem(driveId, item.id);
                 }
             }
             else if (!progressDlg->IsCancelled())
             {
+                progressDlg->Close();
                 SalamanderGeneral->SalMessageBox(parent, err.c_str(), LoadStr(IDS_PLUGINNAME), MB_OK | MB_ICONERROR);
+                cancelOrHandlePath = TRUE;
+                return TRUE;
             }
         }
 
@@ -342,14 +355,24 @@ void WINAPI CPluginFS::ViewFile(const char* fsName, HWND parent,
 {
     if (!file.Name || !salamander) return;
 
-    std::string itemId = FindItemByPanelName(file.Name, FALSE);
-    std::string driveId;
+    std::string driveId, folderItemId, siteId;
+    ResolveCurrentTarget(driveId, folderItemId, siteId);
+    if (driveId.empty() && m_currentPath.rfind("\\OneDrive", 0) == 0) driveId = "me";
 
     SharePointApi::SharePointItem targetItem;
-    targetItem.id = itemId;
-    targetItem.driveId = driveId;
-    targetItem.name = file.Name;
-    targetItem.size = (int64_t)file.Size.Value;
+    const auto* pItem = FindItemObjectByPanelName(file.Name, FALSE);
+    if (pItem)
+    {
+        targetItem = *pItem;
+        if (targetItem.driveId.empty()) targetItem.driveId = driveId;
+    }
+    else
+    {
+        targetItem.id = FindItemByPanelName(file.Name, FALSE);
+        targetItem.driveId = driveId;
+        targetItem.name = file.Name;
+        targetItem.size = (int64_t)file.Size.Value;
+    }
 
     std::string uniqueFileName = std::string(fsName ? fsName : "sharepoint") + ":" + m_currentPath + "\\" + targetItem.id + "_" + targetItem.name;
 
