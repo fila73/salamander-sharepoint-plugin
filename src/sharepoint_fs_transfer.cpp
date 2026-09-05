@@ -211,20 +211,107 @@ BOOL WINAPI CPluginFS::CopyOrMoveFromDiskToFS(BOOL copy, int mode, const char* f
     return TRUE;
 }
 
+static bool EnsureLocalDirectoryExists(const std::wstring& dirPath)
+{
+    if (dirPath.empty()) return false;
+    DWORD attrs = GetFileAttributesW(dirPath.c_str());
+    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
+        return true;
+
+    size_t pos = 0;
+    while ((pos = dirPath.find_first_of(L"\\/", pos + 1)) != std::wstring::npos)
+    {
+        std::wstring sub = dirPath.substr(0, pos);
+        if (sub.length() > 2 && sub.back() != L':')
+        {
+            CreateDirectoryW(sub.c_str(), NULL);
+        }
+    }
+    CreateDirectoryW(dirPath.c_str(), NULL);
+    attrs = GetFileAttributesW(dirPath.c_str());
+    return (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY));
+}
+
+static void ParseLocalTarget(const std::string& rawTargetPath, int totalItems, const std::string& singleFileName,
+                             std::wstring& outTargetDir, std::wstring& outSingleTargetFileName)
+{
+    std::string s = rawTargetPath;
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.pop_back();
+
+    // Strip wildcards e.g. \*.*, *.*, \*, *
+    if (s.length() >= 4 && s.substr(s.length() - 4) == "\\*.*")
+    {
+        s = s.substr(0, s.length() - 4);
+    }
+    else if (s.length() >= 3 && s.substr(s.length() - 3) == "*.*")
+    {
+        s = s.substr(0, s.length() - 3);
+        if (!s.empty() && s.back() == '\\') s.pop_back();
+    }
+    else if (s.length() >= 2 && s.substr(s.length() - 2) == "\\*")
+    {
+        s = s.substr(0, s.length() - 2);
+    }
+    else if (s.length() >= 1 && s.back() == '*')
+    {
+        s.pop_back();
+        if (!s.empty() && s.back() == '\\') s.pop_back();
+    }
+
+    std::wstring ws = SharePointHttp::HttpClient::AnsiToWide(s);
+
+    if (totalItems == 1 && !singleFileName.empty())
+    {
+        DWORD attrs = GetFileAttributesW(ws.c_str());
+        if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
+        {
+            outTargetDir = ws;
+            outSingleTargetFileName = L"";
+        }
+        else
+        {
+            size_t lastSlash = ws.find_last_of(L"\\/");
+            if (lastSlash != std::wstring::npos)
+            {
+                std::wstring parentDir = ws.substr(0, lastSlash);
+                std::wstring namePart = ws.substr(lastSlash + 1);
+                DWORD parentAttrs = GetFileAttributesW(parentDir.c_str());
+                if (parentAttrs != INVALID_FILE_ATTRIBUTES && (parentAttrs & FILE_ATTRIBUTE_DIRECTORY))
+                {
+                    outTargetDir = parentDir;
+                    outSingleTargetFileName = namePart;
+                    return;
+                }
+            }
+            outTargetDir = ws;
+            outSingleTargetFileName = L"";
+        }
+    }
+    else
+    {
+        outTargetDir = ws;
+        outSingleTargetFileName = L"";
+    }
+}
+
 BOOL WINAPI CPluginFS::CopyOrMoveFromFS(BOOL copy, int mode, const char* fsName, HWND parent,
-                                       int panel, int selectedFiles, int selectedDirs,
-                                       char* targetPath, BOOL& operationMask,
-                                       BOOL& cancelOrHandlePath, HWND dropTarget)
+                                        int panel, int selectedFiles, int selectedDirs,
+                                        char* targetPath, BOOL& operationMask,
+                                        BOOL& cancelOrHandlePath, HWND dropTarget)
 {
     operationMask = FALSE;
     cancelOrHandlePath = FALSE;
 
     if (mode == 1)
     {
-        if (targetPath && targetPath[0] == 0)
+        if (targetPath)
         {
-            int otherPanel = (panel == PANEL_SOURCE) ? PANEL_TARGET : PANEL_SOURCE;
-            SalamanderGeneral->GetPanelPath(otherPanel, targetPath, MAX_PATH, NULL, NULL, 0);
+            if (targetPath[0] == 0)
+            {
+                int otherPanel = (panel == PANEL_SOURCE) ? PANEL_TARGET : PANEL_SOURCE;
+                SalamanderGeneral->GetPanelPath(otherPanel, targetPath, MAX_PATH, NULL, NULL, 0);
+            }
+            SalamanderGeneral->SalPathAppend(targetPath, "*.*", MAX_PATH);
         }
         return FALSE;
     }
@@ -234,13 +321,10 @@ BOOL WINAPI CPluginFS::CopyOrMoveFromFS(BOOL copy, int mode, const char* fsName,
     }
 
     if (!targetPath || !*targetPath) return FALSE;
-    std::wstring wTargetDir = SharePointHttp::HttpClient::AnsiToWide(targetPath);
 
     std::string driveId, folderItemId, siteId;
     ResolveCurrentTarget(driveId, folderItemId, siteId);
     if (driveId.empty() && m_currentPath.rfind("\\OneDrive", 0) == 0) driveId = "me";
-
-    auto progressDlg = CDialogTransferProgress::Create(parent, true);
 
     BOOL focused = (selectedFiles == 0 && selectedDirs == 0);
     int index = 0;
@@ -248,6 +332,7 @@ BOOL WINAPI CPluginFS::CopyOrMoveFromFS(BOOL copy, int mode, const char* fsName,
 
     int totalCount = 0;
     int64_t totalBytes = 0;
+    std::string firstFileName;
 
     while (true)
     {
@@ -258,10 +343,21 @@ BOOL WINAPI CPluginFS::CopyOrMoveFromFS(BOOL copy, int mode, const char* fsName,
         {
             totalCount++;
             totalBytes += (int64_t)f->Size.Value;
+            if (firstFileName.empty()) firstFileName = f->Name;
         }
         if (focused) break;
     }
 
+    if (totalCount == 0)
+    {
+        return TRUE;
+    }
+
+    std::wstring wTargetDir, wSingleTargetFileName;
+    ParseLocalTarget(targetPath, totalCount, firstFileName, wTargetDir, wSingleTargetFileName);
+    EnsureLocalDirectoryExists(wTargetDir);
+
+    auto progressDlg = CDialogTransferProgress::Create(parent, true);
     progressDlg->SetTotalItemsCount(totalCount);
     progressDlg->SetTotalBatchBytes(totalBytes);
 
@@ -298,7 +394,15 @@ BOOL WINAPI CPluginFS::CopyOrMoveFromFS(BOOL copy, int mode, const char* fsName,
 
             std::wstring destFile = wTargetDir;
             if (!destFile.empty() && destFile.back() != L'\\') destFile += L"\\";
-            destFile += SharePointHttp::HttpClient::SanitizeFileNameForLocalFsW(SharePointHttp::HttpClient::Utf8ToWide(fileName));
+
+            if (totalCount == 1 && !wSingleTargetFileName.empty())
+            {
+                destFile += wSingleTargetFileName;
+            }
+            else
+            {
+                destFile += SharePointHttp::HttpClient::SanitizeFileNameForLocalFsW(SharePointHttp::HttpClient::Utf8ToWide(fileName));
+            }
 
             auto progCb = [&](int64_t bytesTransferred, int64_t totalFileBytes) -> bool {
                 progressDlg->UpdateFileProgress(bytesTransferred, totalFileBytes);

@@ -198,6 +198,11 @@ Cloudová úložiště mohou mít stejnojmenné položky. Panel Salamandera vyž
 - Pokud modeless dialog vytvořený přes `Create()` dědí z `CDialog` a je alokován pomocí `new` / `std::unique_ptr`, dochází při destrukci k internímu konfliktu správy haldy v `CWindowsObject` (`STATUS_HEAP_CORRUPTION 0xC0000374`).
 - Modeless dialogy (jako `CTransferProgressDialog` nebo `CSharePointFindDialog`) musí být implementovány jako samostatné třídy přímo s Win32 API (`CreateDialogParamA`, `DestroyWindow`) a ukazatelem `this` předávaným přes `GWLP_USERDATA`.
 
+### ⚠️ 9. Parsování cílové cesty v CopyOrMoveFromFS (Maska `\*.*`)
+- Salamander v dialogu F5 (Kopírovat) často předvyplňuje masku `\*.*` na konci cílové složky (např. `C:\Downloads\*.*`).
+- Před skládáním výsledné cesty souboru je nutné tuto masku odstranit (`ParseLocalTarget`), jinak `CreateFileW` selže s chybou `ERROR_INVALID_NAME` (123) nebo `ERROR_ACCESS_DENIED` (5).
+- Zároveň je nutné zajistit existenci případných chybějících cílových podsložek (`EnsureLocalDirectoryExists`).
+
 ---
 
 ## 6. Sestavení ze zdrojových kódů (MinGW-w64)

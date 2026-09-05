@@ -91,4 +91,13 @@ Chronologický přehled dokončených prací, implementačních kroků a vyřeš
 - **Příčina**: Třída `CTransferProgressDialog` dědila z `CCommonDialog` / `CDialog` / `CWindowsObject` (`winliblt`). Tyto třídy Open Salamander frameworku interně spravují životní cyklus oken a paměti (`ooDynamic` / `ooStandard`), což při ručním řízení paměti a volání `delete` v destruktoru `CDialogTransferProgress::Close()` vedlo ke kolizi alokátorů a poškození haldy.
 - **Řešení**: `CTransferProgressDialog` byl plně osamostatněn od tříd `CCommonDialog`/`CDialog` a přepsán na čisté nativní Win32 `CreateDialogParamA` / `DestroyWindow` s bezpečným předáním `this` přes `GWLP_USERDATA` (obdobně jako `CSharePointFindDialog`), což garantuje 100% stabilitu haldy.
 
+### 11. Oprava chyby vytváření lokálního souboru při stahování (F5 / Copy)
+- **Problém**: Při stahování souboru z OneDrive/SharePointu přes F5 (Kopírovat) operace skončila chybou *"Failed to create local destination file"* nebo hlášením o chybějících právech.
+- **Příčina**: Open Salamander ve výchozím dialogu F5 předvyplňuje masku `\*.*` (např. `C:\Downloads\*.*`). V `CopyOrMoveFromFS` se název stahovaného souboru přímo připojil k tomuto řetězci (`C:\Downloads\*.*\soubor.txt`), což Win32 funkce `CreateFileW` odmítla jako neplatný název souboru / neplatnou cestu.
+- **Řešení**:
+  - Implementována funkce `ParseLocalTarget()`, která odstraňuje masky `\*.*`, `*.*`, `\*`, `*`, ořezává mezery a podporuje jak složky, tak přejmenování při kopírování jednoho souboru.
+  - Implementována funkce `EnsureLocalDirectoryExists()`, která automaticky vytvoří případné chybějící cílové podadresáře.
+  - V `HttpClient::DownloadToFile` vylepšeno chybové hlášení – při selhání `CreateFileW` se vrací přesný kód Win32 chyby i plná cílová cesta.
+
+
 

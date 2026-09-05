@@ -375,9 +375,13 @@ bool HttpClient::DownloadToFile(const std::string& url,
                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE)
     {
+        DWORD errCode = GetLastError();
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
-        if (errorOut) *errorOut = "Failed to create local destination file";
+        if (errorOut)
+        {
+            *errorOut = "Failed to create local destination file (error " + std::to_string(errCode) + "): " + WideToUtf8(targetLocalPath);
+        }
         return false;
     }
 
