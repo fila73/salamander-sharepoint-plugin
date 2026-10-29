@@ -66,7 +66,8 @@ public:
                         const std::string& bearerToken = "",
                         ProgressCallback progressCallback = nullptr,
                         const bool* cancelFlag = nullptr,
-                        std::string* errorOut = nullptr);
+                        std::string* errorOut = nullptr,
+                        int64_t expectedSize = -1);
 
     bool UploadSimpleFile(const std::string& url,
                           const std::wstring& localFilePath,

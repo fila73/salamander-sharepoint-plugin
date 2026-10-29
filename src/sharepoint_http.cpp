@@ -266,7 +266,8 @@ bool HttpClient::DownloadToFile(const std::string& url,
                                 const std::string& bearerToken,
                                 ProgressCallback progressCallback,
                                 const bool* cancelFlag,
-                                std::string* errorOut)
+                                std::string* errorOut,
+                                int64_t expectedSize)
 {
     if (!Initialize())
     {
@@ -349,7 +350,7 @@ bool HttpClient::DownloadToFile(const std::string& url,
             std::string redirectUrl = WideToUtf8(location);
             WinHttpCloseHandle(hRequest);
             WinHttpCloseHandle(hConnect);
-            return DownloadToFile(redirectUrl, targetLocalPath, "", progressCallback, cancelFlag, errorOut);
+            return DownloadToFile(redirectUrl, targetLocalPath, "", progressCallback, cancelFlag, errorOut, expectedSize);
         }
     }
 
@@ -374,9 +375,8 @@ bool HttpClient::DownloadToFile(const std::string& url,
 
     // Download into a temp file next to the target; the target is replaced only
     // after the whole download succeeded, so a failure never destroys the original.
-    const std::wstring partPath = SharePointTransfer::PartFilePath(targetLocalPath);
-    HANDLE hFile = CreateFileW(partPath.c_str(), GENERIC_WRITE, 0, NULL,
-                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    std::wstring partPath;
+    HANDLE hFile = SharePointTransfer::CreatePartFile(targetLocalPath, partPath);
     if (hFile == INVALID_HANDLE_VALUE)
     {
         DWORD errCode = GetLastError();
@@ -393,8 +393,16 @@ bool HttpClient::DownloadToFile(const std::string& url,
     DWORD bytesAvailable = 0;
     bool success = true;
 
-    while (WinHttpQueryDataAvailable(hRequest, &bytesAvailable) && bytesAvailable > 0)
+    for (;;)
     {
+        if (!WinHttpQueryDataAvailable(hRequest, &bytesAvailable))
+        {
+            success = false;
+            if (errorOut) *errorOut = "Download failed (WinHttpQueryDataAvailable error " + std::to_string(GetLastError()) + ")";
+            break;
+        }
+        if (bytesAvailable == 0) break; // end of body
+
         if (cancelFlag && *cancelFlag)
         {
             success = false;
@@ -404,7 +412,13 @@ bool HttpClient::DownloadToFile(const std::string& url,
 
         std::vector<char> buffer(bytesAvailable);
         DWORD bytesRead = 0;
-        if (WinHttpReadData(hRequest, buffer.data(), bytesAvailable, &bytesRead) && bytesRead > 0)
+        if (!WinHttpReadData(hRequest, buffer.data(), bytesAvailable, &bytesRead))
+        {
+            success = false;
+            if (errorOut) *errorOut = "Download failed (WinHttpReadData error " + std::to_string(GetLastError()) + ")";
+            break;
+        }
+        if (bytesRead == 0) break;
         {
             DWORD bytesWritten = 0;
             if (!WriteFile(hFile, buffer.data(), bytesRead, &bytesWritten, NULL) || bytesWritten != bytesRead)
@@ -425,13 +439,11 @@ bool HttpClient::DownloadToFile(const std::string& url,
                 }
             }
         }
-        else
-        {
-            break;
-        }
     }
 
-    if (success && totalBytes >= 0 && bytesTransferred != totalBytes)
+    // Without Content-Length fall back to the size reported by Graph metadata.
+    const int64_t wantBytes = totalBytes >= 0 ? totalBytes : expectedSize;
+    if (success && wantBytes >= 0 && bytesTransferred != wantBytes)
     {
         success = false;
         if (errorOut) *errorOut = "Download incomplete";

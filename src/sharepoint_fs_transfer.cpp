@@ -48,8 +48,12 @@ static ConflictChoice AskConflict(HWND parent, ConflictState& state, const std::
     return c;
 }
 
-static void PrecalculateLocalItems(const std::wstring& localPath, bool isDir, int& totalCount, int64_t& totalBytes)
+static void PrecalculateLocalItems(const std::wstring& localPath, bool isDir, int& totalCount, int64_t& totalBytes,
+                                   int depth = 0)
 {
+    if (isDir && (depth > SharePointTransfer::kMaxLocalDepth ||
+                  !SharePointTransfer::GetLocalEntryPolicy(localPath).recurse))
+        return; // reparse-point folders are never followed (UploadTree skips them too)
     if (!isDir)
     {
         totalCount++;
@@ -85,7 +89,8 @@ static void PrecalculateLocalItems(const std::wstring& localPath, bool isDir, in
 
             if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
             {
-                PrecalculateLocalItems(subPath, true, totalCount, totalBytes);
+                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+                    PrecalculateLocalItems(subPath, true, totalCount, totalBytes, depth + 1);
             }
             else
             {
@@ -140,11 +145,27 @@ struct UploadCtx
     int64_t uploadedBytes = 0;
     ConflictState conflict;
     bool cancelled = false;
+    std::vector<std::string> notes; // skipped / kept items, reported once at the end
 };
+
+// Shows the collected notes (skipped reparse points, name clashes) in one message.
+static void ReportNotes(HWND parent, const std::vector<std::string>& notes)
+{
+    if (notes.empty()) return;
+    std::string msg;
+    size_t shown = 0;
+    for (const auto& n : notes)
+    {
+        if (++shown > 15) { msg += "\n..."; break; }
+        if (!msg.empty()) msg += "\n";
+        msg += n;
+    }
+    SalamanderGeneral->SalMessageBox(parent, msg.c_str(), LoadStr(IDS_PLUGINNAME), MB_OK | MB_ICONINFORMATION);
+}
 
 static void UploadTree(UploadCtx& ctx, const std::wstring& localPath, const std::string& name, bool isDir,
                        const std::string& parentId, const std::vector<SharePointApi::SharePointItem>& siblings,
-                       ResultNode& node)
+                       ResultNode& node, int depth = 0)
 {
     node.path = localPath;
     node.isDir = isDir;
@@ -155,6 +176,34 @@ static void UploadTree(UploadCtx& ctx, const std::wstring& localPath, const std:
     {
         ctx.cancelled = true;
         return;
+    }
+
+    // Classify the local item WITHOUT following reparse points (junctions, symlinks).
+    const SharePointTransfer::LocalEntryPolicy pol = SharePointTransfer::GetLocalEntryPolicy(localPath);
+    if (isDir)
+    {
+        if (!pol.recurse)
+        {
+            node.keep = true; // junction / unreadable: not uploaded, not deleted, parents kept
+            if (pol.reportSkipped)
+                ctx.notes.push_back("Skipped (junction / symbolic link folder, kept locally): " +
+                                    SharePointHttp::HttpClient::WideToUtf8(localPath));
+            return;
+        }
+        if (depth > SharePointTransfer::kMaxLocalDepth)
+        {
+            node.keep = true;
+            ctx.notes.push_back("Skipped (folder nesting too deep, kept locally): " +
+                                SharePointHttp::HttpClient::WideToUtf8(localPath));
+            return;
+        }
+    }
+    else if (!pol.mayDelete)
+    {
+        node.keep = true; // symbolic-link file: content may be uploaded, the link itself is never deleted
+        if (pol.reportSkipped)
+            ctx.notes.push_back("Symbolic link uploaded but kept locally: " +
+                                SharePointHttp::HttpClient::WideToUtf8(localPath));
     }
 
     auto& api = SharePointApi::ApiClient::GetInstance();
@@ -207,7 +256,8 @@ static void UploadTree(UploadCtx& ctx, const std::wstring& localPath, const std:
             if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0) continue;
             node.children.emplace_back();
             UploadTree(ctx, localPath + L"\\" + fd.cFileName, SharePointHttp::HttpClient::WideToUtf8(fd.cFileName),
-                       (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0, folderId, kids, node.children.back());
+                       (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0, folderId, kids, node.children.back(),
+                       depth + 1);
             if (ctx.cancelled) { node.dirReady = false; break; }
         } while (FindNextFileW(hFind, &fd));
         FindClose(hFind);
@@ -266,12 +316,14 @@ static void UploadTree(UploadCtx& ctx, const std::wstring& localPath, const std:
 // Move: delete local sources only for items that were really uploaded.
 static void CleanupLocalMoved(const ResultNode& n)
 {
+    if (n.keep) return; // reparse point: never delete through it
     if (!n.isDir)
     {
         if (n.transferred) DeleteFileW(n.path.c_str());
         return;
     }
     for (const auto& c : n.children) CleanupLocalMoved(c);
+    // RemoveDirectoryW never recurses; it fails on a non-empty folder.
     if (SharePointTransfer::ShouldDeleteSource(n)) RemoveDirectoryW(n.path.c_str());
 }
 
@@ -319,6 +371,7 @@ struct DownloadCtx
     ConflictState conflict;
     bool cancelled = false; // user cancelled (also from the conflict dialog)
     bool aborted = false;   // fatal error, already reported
+    std::vector<std::string> notes; // skipped / kept items, reported once at the end
 };
 
 static void DownloadTree(DownloadCtx& ctx, const DlNode& n, const std::wstring& localPath, ResultNode& r)
@@ -351,6 +404,7 @@ static void DownloadTree(DownloadCtx& ctx, const DlNode& n, const std::wstring& 
             return;
         }
         r.dirReady = true;
+        SharePointTransfer::LocalNameSet usedNames; // local names written in this folder by this operation
         for (const auto& k : n.kids)
         {
             r.children.emplace_back();
@@ -365,6 +419,13 @@ static void DownloadTree(DownloadCtx& ctx, const DlNode& n, const std::wstring& 
                 snprintf(buf, sizeof(buf), fmt.c_str(), k.item.name.c_str());
                 ShowTransferError(ctx.parent, buf);
                 cr.dirReady = false; // unsafe name: skipped, never deleted remotely
+                continue;
+            }
+            if (!usedNames.Add(comp))
+            {
+                // two remote names map to one local name: never overwrite the first, keep this remote
+                cr.keep = true;
+                ctx.notes.push_back("Skipped (local name clash, kept in the cloud): " + k.item.name);
                 continue;
             }
             DownloadTree(ctx, k, localPath + L"\\" + comp, cr);
@@ -414,15 +475,17 @@ static void DownloadTree(DownloadCtx& ctx, const DlNode& n, const std::wstring& 
 }
 
 // Move: delete a remote item only if everything below it was downloaded.
-static void CleanupRemoteMoved(const std::string& driveId, const ResultNode& n)
+static void CleanupRemoteMoved(const std::string& driveId, const ResultNode& n, std::vector<std::string>& notes)
 {
     if (SharePointTransfer::ShouldDeleteSource(n))
     {
-        SharePointApi::ApiClient::GetInstance().DeleteItem(driveId, n.remoteId);
+        std::string err;
+        if (!SharePointApi::ApiClient::GetInstance().DeleteItem(driveId, n.remoteId, &err))
+            notes.push_back("Downloaded, but the source stayed in the cloud (delete failed): " + err);
         return;
     }
     if (n.isDir)
-        for (const auto& c : n.children) CleanupRemoteMoved(driveId, c);
+        for (const auto& c : n.children) CleanupRemoteMoved(driveId, c, notes);
 }
 
 BOOL WINAPI CPluginFS::CopyOrMoveFromDiskToFS(BOOL copy, int mode, const char* fsName, HWND parent,
@@ -534,6 +597,7 @@ BOOL WINAPI CPluginFS::CopyOrMoveFromDiskToFS(BOOL copy, int mode, const char* f
     }
 
     progressDlg->Close();
+    ReportNotes(parent, ctx.notes);
 
     if (ctx.cancelled || progressDlg->IsCancelled())
     {
@@ -733,6 +797,7 @@ BOOL WINAPI CPluginFS::CopyOrMoveFromFS(BOOL copy, int mode, const char* fsName,
     ctx.dlg = progressDlg;
     ctx.totalBytes = totalBytes;
 
+    SharePointTransfer::LocalNameSet topNames;
     for (auto& e : entries)
     {
         if (progressDlg->IsCancelled()) break;
@@ -754,13 +819,18 @@ BOOL WINAPI CPluginFS::CopyOrMoveFromFS(BOOL copy, int mode, const char* fsName,
                 ShowTransferError(parent, buf);
                 continue; // skipped: never deleted remotely
             }
+            if (!topNames.Add(comp))
+            {
+                ctx.notes.push_back("Skipped (local name clash, kept in the cloud): " + e.name);
+                continue;
+            }
             destPath += comp;
         }
 
         ResultNode result;
         DownloadTree(ctx, e.tree, destPath, result);
 
-        if (!copy) CleanupRemoteMoved(driveId, result);
+        if (!copy) CleanupRemoteMoved(driveId, result, ctx.notes);
         if (ctx.cancelled || ctx.aborted) break;
     }
 
@@ -772,6 +842,7 @@ BOOL WINAPI CPluginFS::CopyOrMoveFromFS(BOOL copy, int mode, const char* fsName,
     }
 
     progressDlg->Close();
+    ReportNotes(parent, ctx.notes);
 
     if (ctx.cancelled || progressDlg->IsCancelled())
     {

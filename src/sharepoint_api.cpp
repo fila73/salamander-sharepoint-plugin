@@ -583,7 +583,7 @@ bool ApiClient::DownloadFile(const SharePointItem& item,
     if (!item.downloadUrl.empty())
     {
         std::string directErr;
-        if (http.DownloadToFile(item.downloadUrl, targetLocalPath, "", progressCallback, cancelFlag, &directErr))
+        if (http.DownloadToFile(item.downloadUrl, targetLocalPath, "", progressCallback, cancelFlag, &directErr, item.size))
         {
             return true;
         }
@@ -605,7 +605,7 @@ bool ApiClient::DownloadFile(const SharePointItem& item,
     else
         url = "https://graph.microsoft.com/v1.0/drives/" + item.driveId + "/items/" + item.id + "/content";
 
-    return http.DownloadToFile(url, targetLocalPath, token, progressCallback, cancelFlag, errorOut);
+    return http.DownloadToFile(url, targetLocalPath, token, progressCallback, cancelFlag, errorOut, item.size);
 }
 
 bool ApiClient::UploadFile(const std::string& driveId,
