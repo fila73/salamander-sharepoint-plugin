@@ -583,7 +583,7 @@ bool ApiClient::DownloadFile(const SharePointItem& item,
     if (!item.downloadUrl.empty())
     {
         std::string directErr;
-        if (http.DownloadToFile(item.downloadUrl, targetLocalPath, "", progressCallback, cancelFlag, &directErr))
+        if (http.DownloadToFile(item.downloadUrl, targetLocalPath, "", progressCallback, cancelFlag, &directErr, item.size))
         {
             return true;
         }
@@ -605,7 +605,7 @@ bool ApiClient::DownloadFile(const SharePointItem& item,
     else
         url = "https://graph.microsoft.com/v1.0/drives/" + item.driveId + "/items/" + item.id + "/content";
 
-    return http.DownloadToFile(url, targetLocalPath, token, progressCallback, cancelFlag, errorOut);
+    return http.DownloadToFile(url, targetLocalPath, token, progressCallback, cancelFlag, errorOut, item.size);
 }
 
 bool ApiClient::UploadFile(const std::string& driveId,
@@ -615,10 +615,12 @@ bool ApiClient::UploadFile(const std::string& driveId,
                            SharePointHttp::ProgressCallback progressCallback,
                            const bool* cancelFlag,
                            SharePointItem* itemOut,
-                           std::string* errorOut)
+                           std::string* errorOut,
+                           bool replaceExisting)
 {
     std::string token = SharePointAuth::AuthManager::GetInstance().GetValidAccessToken(errorOut);
     if (token.empty()) return false;
+    const char* conflictBehavior = replaceExisting ? "replace" : "fail";
 
     HANDLE hFile = CreateFileW(localFilePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL,
                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -660,15 +662,24 @@ bool ApiClient::UploadFile(const std::string& driveId,
                 uploadUrl = "https://graph.microsoft.com/v1.0/drives/" + driveId + "/items/" + parentFolderId + ":/" + encName + ":/content";
         }
 
+        // Explicit conflict behavior (Graph default would silently replace).
+        uploadUrl += std::string("?@microsoft.graph.conflictBehavior=") + conflictBehavior;
+
         std::string respBody;
         bool ok = http.UploadSimpleFile(uploadUrl, localFilePath, "application/octet-stream",
                                         token, progressCallback, cancelFlag, &respBody, errorOut);
-        if (ok && itemOut && !respBody.empty())
+        if (!ok)
+            return false;
+        // Same rule as the upload session: success only with a driveItem of the expected size
+        // (Move deletes the local file afterwards).
+        SharePointItem done = ParseDriveItemJson(SharePointJson::Value::Parse(respBody), driveId);
+        if (done.id.empty() || done.isFolder || done.size != fileSize.QuadPart)
         {
-            auto json = SharePointJson::Value::Parse(respBody);
-            *itemOut = ParseDriveItemJson(json, driveId);
+            if (errorOut) *errorOut = "Upload not confirmed: size on the server differs from the local file";
+            return false;
         }
-        return ok;
+        if (itemOut) *itemOut = done;
+        return true;
     }
 
     // Large file upload session (> 4MB)
@@ -690,7 +701,7 @@ bool ApiClient::UploadFile(const std::string& driveId,
 
     SharePointJson::Value sessionReq;
     SharePointJson::Value itemObj(SharePointJson::Type::Object);
-    itemObj.Set("@microsoft.graph.conflictBehavior", SharePointJson::Value("replace"));
+    itemObj.Set("@microsoft.graph.conflictBehavior", SharePointJson::Value(conflictBehavior));
     itemObj.Set("name", SharePointJson::Value(destFileName));
     sessionReq.Set("item", itemObj);
 
@@ -760,10 +771,25 @@ bool ApiClient::UploadFile(const std::string& driveId,
             }
         }
 
-        if (bytesUploaded == totalBytes && itemOut && !chunkResp.body.empty())
+        if (bytesUploaded == totalBytes)
         {
-            auto itemJson = SharePointJson::Value::Parse(chunkResp.body);
-            *itemOut = ParseDriveItemJson(itemJson, driveId);
+            // The final range must be answered with 200/201 and the created driveItem; 202 means
+            // "not finished" and must never count as success (Move would delete the local file).
+            if (chunkResp.statusCode != 200 && chunkResp.statusCode != 201)
+            {
+                uploadSuccess = false;
+                if (errorOut) *errorOut = "Upload not confirmed by the server (final chunk HTTP " +
+                                          std::to_string(chunkResp.statusCode) + ")";
+                break;
+            }
+            SharePointItem done = ParseDriveItemJson(SharePointJson::Value::Parse(chunkResp.body), driveId);
+            if (done.id.empty() || done.isFolder || done.size != totalBytes)
+            {
+                uploadSuccess = false;
+                if (errorOut) *errorOut = "Upload not confirmed: size on the server differs from the local file";
+                break;
+            }
+            if (itemOut) *itemOut = done;
         }
     }
 

@@ -181,6 +181,14 @@ BEGIN
     IDS_FIND_COL_SIZE       "Size"
     IDS_FIND_COL_AUTHOR     "Author"
     IDS_FIND_LOOKIN_ALL     "Entire SharePoint / OneDrive"
+    IDS_XFER_CONFLICT_TITLE "Item already exists"
+    IDS_XFER_CONFLICT_DOWNLOAD_FMT "The target file already exists:\n\n%s\n\nDo you want to overwrite it?"
+    IDS_XFER_CONFLICT_UPLOAD_FMT "An item with this name already exists in the cloud:\n\n%s\n\nDo you want to overwrite it?"
+    IDS_XFER_BTN_OVERWRITE  "&Overwrite"
+    IDS_XFER_BTN_SKIP       "&Skip"
+    IDS_XFER_APPLY_ALL      "Apply to all"
+    IDS_XFER_ERR_UNSAFE_NAME_FMT "Skipped item with an unsafe name: %s"
+    IDS_XFER_ERR_FOLDER_FMT "Cannot process folder %s: %s"
 END
 
 #include "lang_en.rc2"

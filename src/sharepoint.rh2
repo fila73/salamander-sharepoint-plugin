@@ -183,5 +183,13 @@
 #define IDS_FIND_COL_MODIFIED_BY                 2236
 #define IDS_ERR_NO_PERMISSION_DELETE             2237
 #define IDS_ERR_NO_PERMISSION_RENAME             2238
+#define IDS_XFER_CONFLICT_TITLE                  2239
+#define IDS_XFER_CONFLICT_DOWNLOAD_FMT           2240
+#define IDS_XFER_CONFLICT_UPLOAD_FMT             2241
+#define IDS_XFER_BTN_OVERWRITE                   2242
+#define IDS_XFER_BTN_SKIP                        2243
+#define IDS_XFER_APPLY_ALL                       2244
+#define IDS_XFER_ERR_UNSAFE_NAME_FMT             2245
+#define IDS_XFER_ERR_FOLDER_FMT                  2246
 
 #endif // __SHAREPOINT_RH2
