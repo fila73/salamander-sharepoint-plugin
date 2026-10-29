@@ -673,7 +673,7 @@ bool ApiClient::UploadFile(const std::string& driveId,
         // Same rule as the upload session: success only with a driveItem of the expected size
         // (Move deletes the local file afterwards).
         SharePointItem done = ParseDriveItemJson(SharePointJson::Value::Parse(respBody), driveId);
-        if (done.size != fileSize.QuadPart)
+        if (done.id.empty() || done.isFolder || done.size != fileSize.QuadPart)
         {
             if (errorOut) *errorOut = "Upload not confirmed: size on the server differs from the local file";
             return false;
@@ -783,7 +783,7 @@ bool ApiClient::UploadFile(const std::string& driveId,
                 break;
             }
             SharePointItem done = ParseDriveItemJson(SharePointJson::Value::Parse(chunkResp.body), driveId);
-            if (done.size != totalBytes)
+            if (done.id.empty() || done.isFolder || done.size != totalBytes)
             {
                 uploadSuccess = false;
                 if (errorOut) *errorOut = "Upload not confirmed: size on the server differs from the local file";
