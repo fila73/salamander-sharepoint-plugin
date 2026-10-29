@@ -115,23 +115,21 @@ If configuring your own `Client ID`:
 
 ---
 
-## 🛠️ Compilation from Source (MinGW-w64)
+## 🛠️ Compilation from Source (MSVC / MSBuild)
 
 ### Requirements:
-- MinGW-w64 (GCC with C++17 support)
-- `mingw32-make`
-- Open Salamander SDK (in `../salamander-plugins/salamand`)
+- Visual Studio 2022+ (MSVC, C++17) with MSBuild
+- Open Salamander plugin SDK (default `..\..\samandarin\src` relative to the plugin; override with `/p:SalamanderSdkDir=<path>`)
 
 ### Build Command:
 ```powershell
-mingw32-make -f Makefile.mingw clean
-mingw32-make -f Makefile.mingw
+MSBuild src\vcxproj\sharepoint.vcxproj /p:Configuration=Release /p:Platform=x64
 ```
 
 Outputs:
-- `sharepoint.spl` (Plugin binary)
-- `english.slg` (English language resources)
-- `czech.slg` (Czech language resources)
+- `build\Release_x64\sharepoint.spl` (Plugin binary)
+- `build\Release_x64\lang\english.slg` (English language resources)
+- `build\Release_x64\lang\czech.slg` (Czech language resources)
 
 ---
 

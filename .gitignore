@@ -12,3 +12,8 @@ build/
 *.dmp
 .gemini/
 cppcheck_report.txt
+.idea/
+*.obj
+*.pdb
+.vs/
+*.user

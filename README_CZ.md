@@ -116,23 +116,21 @@ Pokud používáte vlastní `Client ID`:
 
 ---
 
-## 🛠️ Kompilace ze zdrojových kódů (MinGW-w64)
+## 🛠️ Kompilace ze zdrojových kódů (MSVC / MSBuild)
 
 ### Požadavky:
-- MinGW-w64 (GCC s podporou C++17)
-- `mingw32-make`
-- Open Salamander SDK (v adresáři `../salamander-plugins/salamand`)
+- Visual Studio 2022+ (MSVC, C++17) s MSBuild
+- SDK pluginů Open Salamander (výchozí `..\..\samandarin\src` vůči pluginu; lze změnit přes `/p:SalamanderSdkDir=<cesta>`)
 
 ### Příkaz pro kompilaci:
 ```powershell
-mingw32-make -f Makefile.mingw clean
-mingw32-make -f Makefile.mingw
+MSBuild src\vcxproj\sharepoint.vcxproj /p:Configuration=Release /p:Platform=x64
 ```
 
 Příkaz vytvoří:
-- `sharepoint.spl` (Hlavní knihovna pluginu)
-- `english.slg` (Anglické jazykové zdroje)
-- `czech.slg` (České jazykové zdroje)
+- `build\Release_x64\sharepoint.spl` (Hlavní knihovna pluginu)
+- `build\Release_x64\lang\english.slg` (Anglické jazykové zdroje)
+- `build\Release_x64\lang\czech.slg` (České jazykové zdroje)
 
 ---
 

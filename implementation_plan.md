@@ -49,7 +49,7 @@
 5. **`src/dialogs.h` & `src/dialogs.cpp`**:
    - Přepsat `CTransferProgressDialog` na samostatnou Win32 třídu bez závislosti na `CCommonDialog`/`CDialog` a předejít tak poškození haldy (0xC0000374).
 6. **Kompilace a testování**:
-   - Sestavit plugin pomocí `mingw32-make -f Makefile.mingw`.
+   - Sestavit plugin pomocí `MSBuild src\vcxproj\sharepoint.vcxproj /p:Configuration=Release /p:Platform=x64`.
    - Zkontrolovat úspěšnost kompilace a vytvoření `sharepoint.spl`, `english.slg`, `czech.slg`.
 7. **Aktualizace dokumentace a záznam do gitu**:
    - Aktualizovat `jobs_done.md`, `PLUGIN_DEV.md`, `README.md`, `README_CZ.md`, `implementation_plan.md`.

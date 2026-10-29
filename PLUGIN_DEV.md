@@ -16,11 +16,11 @@ Plugin do Salamandera se skládá z:
 salamander-sharepoint-plugin/
 ├── .gitignore
 ├── LICENSE                         # GPL-2.0-or-later + SPDX hlavičky
-├── Makefile.mingw                  # Sestavení pomocí MinGW-w64 (GCC/G++, windres)
 ├── PLUGIN_DEV.md                   # Vývojová kuchařka & best practices (tento soubor)
 ├── README.md                       # Uživatelská dokumentace v angličtině
 ├── README_CZ.md                    # Uživatelská dokumentace v češtině
 └── src/
+    ├── vcxproj/                    # MSBuild projekty (sharepoint, lang_sharepoint, lang_sharepoint_cs)
     ├── sharepoint.cpp              # Hlavní vstup, DllMain, CPluginInterface
     ├── sharepoint.h                # Hlavičkový soubor pluginu
     ├── sharepoint.def              # Exportní definice (SalamanderPluginEntry2)
@@ -162,8 +162,8 @@ SharePoint a OneDrive organizují data do hierarchie:
 
 ## 5. Zásadní pravidla a řešení známých chyb (Gotchas)
 
-### ⚠️ 1. Statické linkování běhových knihoven v MinGW (`-static`)
-Vždy použijte `-static -static-libgcc -static-libstdc++`. Jinak bude Salamander vyžadovat externí MinGW runtime DLL (`Chyba 126`).
+### ⚠️ 1. Statické linkování běhových knihoven (`/MT`)
+Vždy použijte statické CRT (`/MT`, `/MTd`). Jinak bude Salamander vyžadovat externí runtime DLL (`Chyba 126`).
 
 ### ⚠️ 2. Ošetření prázdného klíče registru při prvním spuštění (Chyba 6)
 Při prvním spuštění předává Salamander `regKey == NULL`. V `LoadConfiguration` je nutné ověřit `if (registry != NULL && regKey != NULL)`.
@@ -205,14 +205,15 @@ Cloudová úložiště mohou mít stejnojmenné položky. Panel Salamandera vyž
 
 ---
 
-## 6. Sestavení ze zdrojových kódů (MinGW-w64)
+## 6. Sestavení ze zdrojových kódů (MSVC / MSBuild)
 
 ```powershell
-mingw32-make -f Makefile.mingw clean
-mingw32-make -f Makefile.mingw
+MSBuild src\vcxproj\sharepoint.vcxproj /p:Configuration=Release /p:Platform=x64
 ```
 
+SDK pluginů se hledá v `..\..\samandarin\src` (přepsat lze přes `/p:SalamanderSdkDir=<cesta>`).
+
 Příkaz vytvoří:
-- `sharepoint.spl` (Dynamická knihovna pluginu)
-- `english.slg` (Anglické jazykové zdroje)
-- `czech.slg` (České jazykové zdroje)
+- `build\Release_x64\sharepoint.spl` (Dynamická knihovna pluginu)
+- `build\Release_x64\lang\english.slg` (Anglické jazykové zdroje)
+- `build\Release_x64\lang\czech.slg` (České jazykové zdroje)
