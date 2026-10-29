@@ -128,7 +128,8 @@ public:
                     SharePointHttp::ProgressCallback progressCallback = nullptr,
                     const bool* cancelFlag = nullptr,
                     SharePointItem* itemOut = nullptr,
-                    std::string* errorOut = nullptr);
+                    std::string* errorOut = nullptr,
+                    bool replaceExisting = false); // false: fail if the name exists (caller asks the user first)
 
     static FILETIME ParseIso8601ToFt(const std::string& iso);
 

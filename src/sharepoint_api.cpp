@@ -615,10 +615,12 @@ bool ApiClient::UploadFile(const std::string& driveId,
                            SharePointHttp::ProgressCallback progressCallback,
                            const bool* cancelFlag,
                            SharePointItem* itemOut,
-                           std::string* errorOut)
+                           std::string* errorOut,
+                           bool replaceExisting)
 {
     std::string token = SharePointAuth::AuthManager::GetInstance().GetValidAccessToken(errorOut);
     if (token.empty()) return false;
+    const char* conflictBehavior = replaceExisting ? "replace" : "fail";
 
     HANDLE hFile = CreateFileW(localFilePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL,
                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -660,6 +662,9 @@ bool ApiClient::UploadFile(const std::string& driveId,
                 uploadUrl = "https://graph.microsoft.com/v1.0/drives/" + driveId + "/items/" + parentFolderId + ":/" + encName + ":/content";
         }
 
+        // Explicit conflict behavior (Graph default would silently replace).
+        uploadUrl += std::string("?@microsoft.graph.conflictBehavior=") + conflictBehavior;
+
         std::string respBody;
         bool ok = http.UploadSimpleFile(uploadUrl, localFilePath, "application/octet-stream",
                                         token, progressCallback, cancelFlag, &respBody, errorOut);
@@ -690,7 +695,7 @@ bool ApiClient::UploadFile(const std::string& driveId,
 
     SharePointJson::Value sessionReq;
     SharePointJson::Value itemObj(SharePointJson::Type::Object);
-    itemObj.Set("@microsoft.graph.conflictBehavior", SharePointJson::Value("replace"));
+    itemObj.Set("@microsoft.graph.conflictBehavior", SharePointJson::Value(conflictBehavior));
     itemObj.Set("name", SharePointJson::Value(destFileName));
     sessionReq.Set("item", itemObj);
 

@@ -216,6 +216,25 @@ static void UploadTree(UploadCtx& ctx, const std::wstring& localPath, const std:
 
     ctx.dlg->SetCurrentFileName(name);
 
+    // Name already exists in the cloud: never replace or rename silently, ask the user.
+    bool replaceExisting = false;
+    if (existing)
+    {
+        if (existing->isFolder)
+        {
+            ShowTransferError(ctx.parent, FormatFolderError(name, "a folder with this name already exists"));
+            return;
+        }
+        ConflictChoice choice = AskConflict(ctx.parent, ctx.conflict, name, true);
+        if (choice == ConflictChoice::Cancel)
+        {
+            ctx.cancelled = true;
+            return;
+        }
+        if (choice == ConflictChoice::Skip) return; // skipped: not transferred, local source kept
+        replaceExisting = true;
+    }
+
     auto progCb = [&](int64_t bytesTransferred, int64_t totalFileBytes) -> bool {
         ctx.dlg->UpdateFileProgress(bytesTransferred, totalFileBytes);
         ctx.dlg->UpdateBatchProgress(ctx.uploadedBytes + bytesTransferred, ctx.totalBytes);
@@ -225,7 +244,7 @@ static void UploadTree(UploadCtx& ctx, const std::wstring& localPath, const std:
     SharePointApi::SharePointItem uploadedItem;
     std::string err;
     bool ok = api.UploadFile(ctx.driveId, parentId, localPath, name, progCb, ctx.dlg->GetCancelFlagPtr(),
-                             &uploadedItem, &err);
+                             &uploadedItem, &err, replaceExisting);
     if (ok)
     {
         WIN32_FILE_ATTRIBUTE_DATA ad;
