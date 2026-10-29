@@ -668,12 +668,18 @@ bool ApiClient::UploadFile(const std::string& driveId,
         std::string respBody;
         bool ok = http.UploadSimpleFile(uploadUrl, localFilePath, "application/octet-stream",
                                         token, progressCallback, cancelFlag, &respBody, errorOut);
-        if (ok && itemOut && !respBody.empty())
+        if (!ok)
+            return false;
+        // Same rule as the upload session: success only with a driveItem of the expected size
+        // (Move deletes the local file afterwards).
+        SharePointItem done = ParseDriveItemJson(SharePointJson::Value::Parse(respBody), driveId);
+        if (done.size != fileSize.QuadPart)
         {
-            auto json = SharePointJson::Value::Parse(respBody);
-            *itemOut = ParseDriveItemJson(json, driveId);
+            if (errorOut) *errorOut = "Upload not confirmed: size on the server differs from the local file";
+            return false;
         }
-        return ok;
+        if (itemOut) *itemOut = done;
+        return true;
     }
 
     // Large file upload session (> 4MB)

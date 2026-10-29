@@ -562,8 +562,18 @@ bool HttpClient::UploadSimpleFile(const std::string& url,
     bool success = true;
     DWORD bytesRead = 0;
 
-    while (ReadFile(hFile, buffer.data(), (DWORD)buffer.size(), &bytesRead, NULL) && bytesRead > 0)
+    for (;;)
     {
+        if (!ReadFile(hFile, buffer.data(), (DWORD)buffer.size(), &bytesRead, NULL))
+        {
+            // e.g. failed OneDrive hydration; must not end as a "successful" short upload
+            success = false;
+            if (errorOut) *errorOut = "Failed to read local file during upload";
+            break;
+        }
+        if (bytesRead == 0)
+            break;
+
         if (cancelFlag && *cancelFlag)
         {
             success = false;
@@ -592,6 +602,12 @@ bool HttpClient::UploadSimpleFile(const std::string& url,
     }
 
     CloseHandle(hFile);
+
+    if (success && bytesUploaded != fileSize.QuadPart)
+    {
+        success = false;
+        if (errorOut) *errorOut = "Local file size changed during upload";
+    }
 
     if (success && !WinHttpReceiveResponse(hRequest, NULL))
     {
