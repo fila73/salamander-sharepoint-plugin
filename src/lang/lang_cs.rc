@@ -180,6 +180,14 @@ BEGIN
     IDS_FIND_COL_PATH       "Cesta"
     IDS_FIND_COL_SIZE       "Velikost"
     IDS_FIND_COL_AUTHOR     "Autor"
+    IDS_XFER_CONFLICT_TITLE "Položka již existuje"
+    IDS_XFER_CONFLICT_DOWNLOAD_FMT "Cílový soubor již existuje:\n\n%s\n\nChcete jej přepsat?"
+    IDS_XFER_CONFLICT_UPLOAD_FMT "Položka s tímto názvem již v cloudu existuje:\n\n%s\n\nChcete ji přepsat?"
+    IDS_XFER_BTN_OVERWRITE  "&Přepsat"
+    IDS_XFER_BTN_SKIP       "&Přeskočit"
+    IDS_XFER_APPLY_ALL      "Použít pro všechny"
+    IDS_XFER_ERR_UNSAFE_NAME_FMT "Přeskočena položka s nebezpečným názvem: %s"
+    IDS_XFER_ERR_FOLDER_FMT "Nelze zpracovat složku %s: %s"
     IDS_FIND_LOOKIN_ALL     "Celý SharePoint / OneDrive"
 END
 

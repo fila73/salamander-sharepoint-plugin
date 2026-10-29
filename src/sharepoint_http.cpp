@@ -4,6 +4,7 @@
 
 #include "precomp.h"
 #include "sharepoint_http.h"
+#include "sharepoint_transfer_logic.h"
 
 namespace SharePointHttp
 {
@@ -371,7 +372,10 @@ bool HttpClient::DownloadToFile(const std::string& url,
         if (endPtr == contentLenStr) totalBytes = -1;
     }
 
-    HANDLE hFile = CreateFileW(targetLocalPath.c_str(), GENERIC_WRITE, 0, NULL,
+    // Download into a temp file next to the target; the target is replaced only
+    // after the whole download succeeded, so a failure never destroys the original.
+    const std::wstring partPath = SharePointTransfer::PartFilePath(targetLocalPath);
+    HANDLE hFile = CreateFileW(partPath.c_str(), GENERIC_WRITE, 0, NULL,
                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE)
     {
@@ -427,16 +431,29 @@ bool HttpClient::DownloadToFile(const std::string& url,
         }
     }
 
+    if (success && totalBytes >= 0 && bytesTransferred != totalBytes)
+    {
+        success = false;
+        if (errorOut) *errorOut = "Download incomplete";
+    }
+
     CloseHandle(hFile);
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
 
     if (!success)
     {
-        DeleteFileW(targetLocalPath.c_str());
+        SharePointTransfer::DiscardPartFile(partPath);
+        return false;
     }
 
-    return success;
+    if (!SharePointTransfer::CommitPartFile(partPath, targetLocalPath))
+    {
+        if (errorOut) *errorOut = "Failed to replace destination file: " + WideToUtf8(targetLocalPath);
+        return false;
+    }
+
+    return true;
 }
 
 bool HttpClient::UploadSimpleFile(const std::string& url,

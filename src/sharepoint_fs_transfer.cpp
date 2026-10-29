@@ -10,6 +10,43 @@
 #include "sharepoint_http.h"
 #include "sharepoint_log.h"
 #include "dialogs.h"
+#include "sharepoint_transfer_logic.h"
+
+using SharePointTransfer::ConflictChoice;
+using SharePointTransfer::ConflictState;
+
+// Asks the user what to do with an already existing item (Overwrite / Skip / Cancel,
+// with "Apply to all" giving Overwrite all / Skip all). Honors a remembered batch decision.
+static ConflictChoice AskConflict(HWND parent, ConflictState& state, const std::string& displayName, bool isUpload)
+{
+    if (state.hasAll) return state.all;
+
+    char text[2 * MAX_PATH + 512];
+    std::string fmt = LoadStr(isUpload ? IDS_XFER_CONFLICT_UPLOAD_FMT : IDS_XFER_CONFLICT_DOWNLOAD_FMT);
+    snprintf(text, sizeof(text), fmt.c_str(), displayName.c_str());
+    std::string title = LoadStr(IDS_XFER_CONFLICT_TITLE);
+    std::string checkText = LoadStr(IDS_XFER_APPLY_ALL);
+    std::string btnOverwrite = LoadStr(IDS_XFER_BTN_OVERWRITE);
+    std::string btnSkip = LoadStr(IDS_XFER_BTN_SKIP);
+    std::string alias = std::to_string(IDYES) + "\t" + btnOverwrite + "\t" + std::to_string(IDNO) + "\t" + btnSkip;
+
+    BOOL applyAll = FALSE;
+    MSGBOXEX_PARAMS p = {};
+    p.HParent = parent;
+    p.Text = text;
+    p.Caption = title.c_str();
+    p.Flags = MSGBOXEX_YESNOCANCEL | MSGBOXEX_ICONQUESTION | MSGBOXEX_DEFBUTTON2 | MSGBOXEX_ESCAPEENABLED;
+    p.CheckBoxText = checkText.c_str();
+    p.CheckBoxValue = &applyAll;
+    p.AliasBtnNames = alias.c_str();
+    int res = SalamanderGeneral->SalMessageBoxEx(&p);
+
+    ConflictChoice c = ConflictChoice::Cancel;
+    if (res == IDYES) c = ConflictChoice::Overwrite;
+    else if (res == IDNO) c = ConflictChoice::Skip;
+    state.Remember(c, applyAll != FALSE);
+    return c;
+}
 
 static void PrecalculateLocalItems(const std::wstring& localPath, bool isDir, int& totalCount, int64_t& totalBytes)
 {
@@ -362,6 +399,7 @@ BOOL WINAPI CPluginFS::CopyOrMoveFromFS(BOOL copy, int mode, const char* fsName,
     progressDlg->SetTotalBatchBytes(totalBytes);
 
     int64_t batchDownloadedBytes = 0;
+    ConflictState conflictState;
     index = 0;
 
     while (true)
@@ -402,6 +440,22 @@ BOOL WINAPI CPluginFS::CopyOrMoveFromFS(BOOL copy, int mode, const char* fsName,
             else
             {
                 destFile += SharePointHttp::HttpClient::SanitizeFileNameForLocalFsW(SharePointHttp::HttpClient::Utf8ToWide(fileName));
+            }
+
+            if (GetFileAttributesW(destFile.c_str()) != INVALID_FILE_ATTRIBUTES)
+            {
+                ConflictChoice choice = AskConflict(parent, conflictState, fileName, false);
+                if (choice == ConflictChoice::Cancel)
+                {
+                    cancelOrHandlePath = TRUE;
+                    progressDlg->Close();
+                    return TRUE;
+                }
+                if (choice == ConflictChoice::Skip)
+                {
+                    if (focused) break;
+                    continue; // skipped: not counted as transferred, never deleted remotely
+                }
             }
 
             auto progCb = [&](int64_t bytesTransferred, int64_t totalFileBytes) -> bool {
