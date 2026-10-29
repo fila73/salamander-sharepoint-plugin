@@ -105,7 +105,7 @@ This plugin is compatible with Open Salamander and is licensed under the GNU Gen
 
 ## 3. Klíčové rozhraní Open Salamander Plugin SDK
 
-Plugin komunikuje se Salamanderem přes virtuální C++ třídy definované v `salamander-plugins/salamand/plugins/shared/`:
+Plugin komunikuje se Salamanderem přes virtuální C++ třídy definované v `samandarin/src/plugins/shared/` (SDK ze samandarinu):
 
 ### Hlavní rozhraní:
 1. **`CPluginInterface`**:
