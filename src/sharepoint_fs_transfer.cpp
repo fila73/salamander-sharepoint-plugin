@@ -188,6 +188,9 @@ static void UploadTree(UploadCtx& ctx, const std::wstring& localPath, const std:
             if (pol.reportSkipped)
                 ctx.notes.push_back("Skipped (junction / symbolic link folder, kept locally): " +
                                     SharePointHttp::HttpClient::WideToUtf8(localPath));
+            else
+                ctx.notes.push_back("Skipped (folder unreadable, kept locally): " +
+                                    SharePointHttp::HttpClient::WideToUtf8(localPath));
             return;
         }
         if (depth > SharePointTransfer::kMaxLocalDepth)
@@ -378,6 +381,7 @@ static void DownloadTree(DownloadCtx& ctx, const DlNode& n, const std::wstring& 
 {
     r.isDir = n.item.isFolder;
     r.remoteId = n.item.id;
+    r.name = n.item.name;
     r.transferred = false;
     r.dirReady = false;
 
@@ -481,7 +485,8 @@ static void CleanupRemoteMoved(const std::string& driveId, const ResultNode& n, 
     {
         std::string err;
         if (!SharePointApi::ApiClient::GetInstance().DeleteItem(driveId, n.remoteId, &err))
-            notes.push_back("Downloaded, but the source stayed in the cloud (delete failed): " + err);
+            notes.push_back("Downloaded, but the source stayed in the cloud (delete failed, item " +
+                            (n.name.empty() ? n.remoteId : n.name) + "): " + err);
         return;
     }
     if (n.isDir)

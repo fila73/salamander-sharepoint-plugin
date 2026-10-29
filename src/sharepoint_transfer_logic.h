@@ -112,9 +112,22 @@ class LocalNameSet
 public:
     bool Add(const std::wstring& name)
     {
-        std::wstring k;
-        for (wchar_t c : name) k += (wchar_t)towlower(c);
-        return m_set.insert(k).second;
+        return m_set.insert(FoldName(name)).second;
+    }
+
+    // NTFS-like folding: invariant-locale uppercase (Č/č, É/é, Д/д equal; ß stays distinct from ss).
+    static std::wstring FoldName(const std::wstring& name)
+    {
+        if (name.empty()) return name;
+        int n = LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE, name.c_str(), (int)name.size(), NULL, 0,
+                              NULL, NULL, 0);
+        if (n <= 0) return name; // cannot fold: exact comparison
+        std::wstring k((size_t)n, L'\0');
+        n = LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE, name.c_str(), (int)name.size(), &k[0], n,
+                          NULL, NULL, 0);
+        if (n <= 0) return name;
+        k.resize((size_t)n);
+        return k;
     }
 
 private:
@@ -135,10 +148,20 @@ struct LocalEntryPolicy
     bool reportSkipped; // tell the user the item was skipped / not deleted
 };
 
-inline LocalEntryPolicy ClassifyLocalEntry(uint32_t attrs)
+constexpr uint32_t kReparseTagNameSurrogate = 0x20000000; // IsReparseTagNameSurrogate bit
+
+// A reparse point is a real link (junction, symlink, ...) only when its tag is a name surrogate.
+// Cloud-files placeholders (OneDrive, tag 0x9000xxxx) are ordinary files/folders for us.
+// reparseTag 0 = unknown / unreadable -> treated as a link (safe).
+inline bool IsLinkReparseTag(uint32_t reparseTag)
+{
+    return reparseTag == 0 || (reparseTag & kReparseTagNameSurrogate) != 0;
+}
+
+inline LocalEntryPolicy ClassifyLocalEntry(uint32_t attrs, uint32_t reparseTag = 0)
 {
     bool dir = (attrs & kAttrDirectory) != 0;
-    bool reparse = (attrs & kAttrReparsePoint) != 0;
+    bool reparse = (attrs & kAttrReparsePoint) != 0 && IsLinkReparseTag(reparseTag);
     if (dir && reparse) return {false, false, false, true}; // junction / symlinked dir: never followed
     if (dir) return {true, false, true, false};
     if (reparse) return {false, true, false, true};         // symlinked file: content uploaded, link kept
@@ -148,9 +171,11 @@ inline LocalEntryPolicy ClassifyLocalEntry(uint32_t attrs)
 // Policy of a local path, looked at WITHOUT following reparse points. Unreadable = untouchable.
 inline LocalEntryPolicy GetLocalEntryPolicy(const std::wstring& path)
 {
-    DWORD a = GetFileAttributesW(path.c_str());
-    if (a == INVALID_FILE_ATTRIBUTES) return {false, false, false, false};
-    return ClassifyLocalEntry((uint32_t)a);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(path.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return {false, false, false, false};
+    FindClose(h);
+    return ClassifyLocalEntry((uint32_t)fd.dwFileAttributes, (uint32_t)fd.dwReserved0);
 }
 
 // ---- conflict policy ---------------------------------------------------------
@@ -185,6 +210,7 @@ struct ResultNode
     bool isDir = false;
     std::wstring path;         // local path (upload source)
     std::string remoteId;      // remote item id (download source)
+    std::string name;          // remote item name (for messages)
     bool transferred = false; // file: really transferred (not skipped / failed)
     bool dirReady = true;     // dir: created / merged successfully
     bool keep = false;        // source must stay (reparse point, name clash): never deleted

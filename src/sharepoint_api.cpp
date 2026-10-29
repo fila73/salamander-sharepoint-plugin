@@ -765,10 +765,25 @@ bool ApiClient::UploadFile(const std::string& driveId,
             }
         }
 
-        if (bytesUploaded == totalBytes && itemOut && !chunkResp.body.empty())
+        if (bytesUploaded == totalBytes)
         {
-            auto itemJson = SharePointJson::Value::Parse(chunkResp.body);
-            *itemOut = ParseDriveItemJson(itemJson, driveId);
+            // The final range must be answered with 200/201 and the created driveItem; 202 means
+            // "not finished" and must never count as success (Move would delete the local file).
+            if (chunkResp.statusCode != 200 && chunkResp.statusCode != 201)
+            {
+                uploadSuccess = false;
+                if (errorOut) *errorOut = "Upload not confirmed by the server (final chunk HTTP " +
+                                          std::to_string(chunkResp.statusCode) + ")";
+                break;
+            }
+            SharePointItem done = ParseDriveItemJson(SharePointJson::Value::Parse(chunkResp.body), driveId);
+            if (done.size != totalBytes)
+            {
+                uploadSuccess = false;
+                if (errorOut) *errorOut = "Upload not confirmed: size on the server differs from the local file";
+                break;
+            }
+            if (itemOut) *itemOut = done;
         }
     }
 

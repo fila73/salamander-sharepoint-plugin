@@ -52,6 +52,28 @@ int main()
     // local name clashes (case-insensitive)
     { LocalNameSet ns; CHECK(ns.Add(L"a.txt")); CHECK(!ns.Add(L"A.TXT")); CHECK(ns.Add(L"b.txt")); }
 
+    // non-ASCII case folding (NTFS-like)
+    { LocalNameSet ns; CHECK(ns.Add(L"\u010Caj.txt")); CHECK(!ns.Add(L"\u010Daj.txt")); }
+    { LocalNameSet ns; CHECK(ns.Add(L"\u00C9.txt")); CHECK(!ns.Add(L"\u00E9.TXT")); }
+    { LocalNameSet ns; CHECK(ns.Add(L"\u0414")); CHECK(!ns.Add(L"\u0434")); }
+    { LocalNameSet ns; CHECK(ns.Add(L"stra\u00DFe")); CHECK(ns.Add(L"strasse")); }
+
+    // cloud-files placeholder (OneDrive) is not a link; name-surrogate tags and unknown tags are
+    CHECK(ClassifyLocalEntry(FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT, 0x9000701A).recurse);
+    CHECK(ClassifyLocalEntry(FILE_ATTRIBUTE_REPARSE_POINT, 0x9000601A).mayDelete);
+    CHECK(!ClassifyLocalEntry(FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT, 0xA0000003).recurse); // mount point
+    CHECK(!ClassifyLocalEntry(FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT, 0xA000000C).recurse); // symlink
+    {
+        const wchar_t* od = L"C:\\Users\\filip\\OneDrive";
+        DWORD a = GetFileAttributesW(od);
+        if (a != INVALID_FILE_ATTRIBUTES)
+        {
+            LocalEntryPolicy po = GetLocalEntryPolicy(od);
+            printf("OneDrive attrs=0x%lx recurse=%d\n", a, (int)po.recurse);
+            CHECK(po.recurse);
+        }
+    }
+
     // reparse-point classification
     CHECK(ClassifyLocalEntry(FILE_ATTRIBUTE_DIRECTORY).recurse);
     CHECK(!ClassifyLocalEntry(FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT).recurse);
