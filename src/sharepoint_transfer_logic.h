@@ -104,6 +104,8 @@ struct ConflictState
 struct ResultNode
 {
     bool isDir = false;
+    std::wstring path;         // local path (upload source)
+    std::string remoteId;      // remote item id (download source)
     bool transferred = false; // file: really transferred (not skipped / failed)
     bool dirReady = true;     // dir: created / merged successfully
     std::vector<ResultNode> children;

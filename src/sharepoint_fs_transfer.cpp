@@ -100,6 +100,312 @@ static void PrecalculateLocalItems(const std::wstring& localPath, bool isDir, in
     }
 }
 
+using SharePointTransfer::ResultNode;
+
+static bool SameRemoteName(const std::string& a, const std::string& b)
+{
+    return _wcsicmp(SharePointHttp::HttpClient::Utf8ToWide(a).c_str(),
+                    SharePointHttp::HttpClient::Utf8ToWide(b).c_str()) == 0;
+}
+
+static const SharePointApi::SharePointItem* FindRemoteByName(const std::vector<SharePointApi::SharePointItem>& items,
+                                                             const std::string& name)
+{
+    for (const auto& it : items)
+        if (SameRemoteName(it.name, name)) return &it;
+    return nullptr;
+}
+
+static void ShowTransferError(HWND parent, const std::string& msg)
+{
+    SalamanderGeneral->SalMessageBox(parent, msg.c_str(), LoadStr(IDS_PLUGINNAME), MB_OK | MB_ICONERROR);
+}
+
+static std::string FormatFolderError(const std::string& folder, const std::string& err)
+{
+    char buf[2 * MAX_PATH + 512];
+    std::string fmt = LoadStr(IDS_XFER_ERR_FOLDER_FMT);
+    snprintf(buf, sizeof(buf), fmt.c_str(), folder.c_str(), err.c_str());
+    return buf;
+}
+
+// ---- upload (local -> cloud), recursive ---------------------------------------
+
+struct UploadCtx
+{
+    HWND parent = NULL;
+    std::string driveId;
+    std::shared_ptr<CDialogTransferProgress> dlg;
+    int64_t totalBytes = 0;
+    int64_t uploadedBytes = 0;
+    ConflictState conflict;
+    bool cancelled = false;
+};
+
+static void UploadTree(UploadCtx& ctx, const std::wstring& localPath, const std::string& name, bool isDir,
+                       const std::string& parentId, const std::vector<SharePointApi::SharePointItem>& siblings,
+                       ResultNode& node)
+{
+    node.path = localPath;
+    node.isDir = isDir;
+    node.transferred = false;
+    node.dirReady = false;
+
+    if (ctx.dlg->IsCancelled())
+    {
+        ctx.cancelled = true;
+        return;
+    }
+
+    auto& api = SharePointApi::ApiClient::GetInstance();
+    const SharePointApi::SharePointItem* existing = FindRemoteByName(siblings, name);
+
+    if (isDir)
+    {
+        std::string folderId, err;
+        bool existed = false;
+        if (existing && existing->isFolder)
+        {
+            folderId = existing->id; // merge into the existing remote folder
+            existed = true;
+        }
+        else if (existing)
+        {
+            ShowTransferError(ctx.parent, FormatFolderError(name, "an item with this name already exists"));
+            return;
+        }
+        else
+        {
+            SharePointApi::SharePointItem created;
+            if (!api.CreateFolder(ctx.driveId, parentId, name, created, &err))
+            {
+                ShowTransferError(ctx.parent, FormatFolderError(name, err));
+                return;
+            }
+            folderId = created.id;
+        }
+
+        std::vector<SharePointApi::SharePointItem> kids;
+        if (existed && !api.ListDriveChildren(ctx.driveId, folderId, kids, &err))
+        {
+            ShowTransferError(ctx.parent, FormatFolderError(name, err));
+            return;
+        }
+        node.dirReady = true;
+
+        std::wstring pattern = localPath + L"\\*";
+        WIN32_FIND_DATAW fd;
+        HANDLE hFind = FindFirstFileW(pattern.c_str(), &fd);
+        if (hFind == INVALID_HANDLE_VALUE)
+        {
+            // cannot enumerate: the folder is not known to be fully uploaded
+            node.dirReady = false;
+            return;
+        }
+        do
+        {
+            if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0) continue;
+            node.children.emplace_back();
+            UploadTree(ctx, localPath + L"\\" + fd.cFileName, SharePointHttp::HttpClient::WideToUtf8(fd.cFileName),
+                       (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0, folderId, kids, node.children.back());
+            if (ctx.cancelled) { node.dirReady = false; break; }
+        } while (FindNextFileW(hFind, &fd));
+        FindClose(hFind);
+        return;
+    }
+
+    ctx.dlg->SetCurrentFileName(name);
+
+    auto progCb = [&](int64_t bytesTransferred, int64_t totalFileBytes) -> bool {
+        ctx.dlg->UpdateFileProgress(bytesTransferred, totalFileBytes);
+        ctx.dlg->UpdateBatchProgress(ctx.uploadedBytes + bytesTransferred, ctx.totalBytes);
+        return !ctx.dlg->IsCancelled();
+    };
+
+    SharePointApi::SharePointItem uploadedItem;
+    std::string err;
+    bool ok = api.UploadFile(ctx.driveId, parentId, localPath, name, progCb, ctx.dlg->GetCancelFlagPtr(),
+                             &uploadedItem, &err);
+    if (ok)
+    {
+        WIN32_FILE_ATTRIBUTE_DATA ad;
+        if (GetFileAttributesExW(localPath.c_str(), GetFileExInfoStandard, &ad))
+            ctx.uploadedBytes += ((int64_t)ad.nFileSizeHigh << 32) | ad.nFileSizeLow;
+        ctx.dlg->IncrementCompletedItems();
+        node.transferred = true;
+    }
+    else if (ctx.dlg->IsCancelled())
+    {
+        ctx.cancelled = true;
+    }
+    else
+    {
+        ShowTransferError(ctx.parent, err);
+    }
+}
+
+// Move: delete local sources only for items that were really uploaded.
+static void CleanupLocalMoved(const ResultNode& n)
+{
+    if (!n.isDir)
+    {
+        if (n.transferred) DeleteFileW(n.path.c_str());
+        return;
+    }
+    for (const auto& c : n.children) CleanupLocalMoved(c);
+    if (SharePointTransfer::ShouldDeleteSource(n)) RemoveDirectoryW(n.path.c_str());
+}
+
+// ---- download (cloud -> local), recursive ---------------------------------------
+
+struct DlNode
+{
+    SharePointApi::SharePointItem item;
+    std::vector<DlNode> kids;
+};
+
+static bool BuildDlTree(const SharePointApi::SharePointItem& item, DlNode& n, int& files, int64_t& bytes,
+                        std::string& err, int depth)
+{
+    n.item = item;
+    if (!item.isFolder)
+    {
+        files++;
+        bytes += item.size;
+        return true;
+    }
+    if (depth > 64)
+    {
+        err = "Folder nesting too deep";
+        return false;
+    }
+    std::vector<SharePointApi::SharePointItem> kids;
+    if (!SharePointApi::ApiClient::GetInstance().ListDriveChildren(item.driveId, item.id, kids, &err)) return false;
+    n.kids.reserve(kids.size());
+    for (auto& k : kids)
+    {
+        if (k.driveId.empty()) k.driveId = item.driveId;
+        n.kids.emplace_back();
+        if (!BuildDlTree(k, n.kids.back(), files, bytes, err, depth + 1)) return false;
+    }
+    return true;
+}
+
+struct DownloadCtx
+{
+    HWND parent = NULL;
+    std::shared_ptr<CDialogTransferProgress> dlg;
+    int64_t totalBytes = 0;
+    int64_t downloadedBytes = 0;
+    ConflictState conflict;
+    bool cancelled = false; // user cancelled (also from the conflict dialog)
+    bool aborted = false;   // fatal error, already reported
+};
+
+static void DownloadTree(DownloadCtx& ctx, const DlNode& n, const std::wstring& localPath, ResultNode& r)
+{
+    r.isDir = n.item.isFolder;
+    r.remoteId = n.item.id;
+    r.transferred = false;
+    r.dirReady = false;
+
+    if (ctx.dlg->IsCancelled())
+    {
+        ctx.cancelled = true;
+        return;
+    }
+
+    if (n.item.isFolder)
+    {
+        DWORD a = GetFileAttributesW(localPath.c_str());
+        if (a == INVALID_FILE_ATTRIBUTES)
+        {
+            if (!CreateDirectoryW(localPath.c_str(), NULL))
+            {
+                ShowTransferError(ctx.parent, FormatFolderError(n.item.name, "cannot create local folder"));
+                return;
+            }
+        }
+        else if (!(a & FILE_ATTRIBUTE_DIRECTORY))
+        {
+            ShowTransferError(ctx.parent, FormatFolderError(n.item.name, "a local file with this name exists"));
+            return;
+        }
+        r.dirReady = true;
+        for (const auto& k : n.kids)
+        {
+            r.children.emplace_back();
+            ResultNode& cr = r.children.back();
+            cr.isDir = k.item.isFolder;
+            cr.remoteId = k.item.id;
+            std::wstring comp;
+            if (!SharePointTransfer::MakeSafeLocalComponent(SharePointHttp::HttpClient::Utf8ToWide(k.item.name), comp))
+            {
+                char buf[2 * MAX_PATH + 256];
+                std::string fmt = LoadStr(IDS_XFER_ERR_UNSAFE_NAME_FMT);
+                snprintf(buf, sizeof(buf), fmt.c_str(), k.item.name.c_str());
+                ShowTransferError(ctx.parent, buf);
+                cr.dirReady = false; // unsafe name: skipped, never deleted remotely
+                continue;
+            }
+            DownloadTree(ctx, k, localPath + L"\\" + comp, cr);
+            if (ctx.cancelled || ctx.aborted) { r.dirReady = false; break; }
+        }
+        return;
+    }
+
+    ctx.dlg->SetCurrentFileName(n.item.name);
+
+    if (GetFileAttributesW(localPath.c_str()) != INVALID_FILE_ATTRIBUTES)
+    {
+        ConflictChoice choice = AskConflict(ctx.parent, ctx.conflict, n.item.name, false);
+        if (choice == ConflictChoice::Cancel)
+        {
+            ctx.cancelled = true;
+            return;
+        }
+        if (choice == ConflictChoice::Skip) return; // skipped: not transferred, never deleted remotely
+    }
+
+    auto progCb = [&](int64_t bytesTransferred, int64_t totalFileBytes) -> bool {
+        ctx.dlg->UpdateFileProgress(bytesTransferred, totalFileBytes);
+        ctx.dlg->UpdateBatchProgress(ctx.downloadedBytes + bytesTransferred, ctx.totalBytes);
+        return !ctx.dlg->IsCancelled();
+    };
+
+    std::string err;
+    bool ok = SharePointApi::ApiClient::GetInstance().DownloadFile(n.item, localPath, progCb,
+                                                                   ctx.dlg->GetCancelFlagPtr(), &err);
+    if (ok)
+    {
+        ctx.downloadedBytes += n.item.size;
+        ctx.dlg->IncrementCompletedItems();
+        r.transferred = true;
+    }
+    else if (ctx.dlg->IsCancelled())
+    {
+        ctx.cancelled = true;
+    }
+    else
+    {
+        ctx.dlg->Close();
+        ShowTransferError(ctx.parent, err);
+        ctx.aborted = true;
+    }
+}
+
+// Move: delete a remote item only if everything below it was downloaded.
+static void CleanupRemoteMoved(const std::string& driveId, const ResultNode& n)
+{
+    if (SharePointTransfer::ShouldDeleteSource(n))
+    {
+        SharePointApi::ApiClient::GetInstance().DeleteItem(driveId, n.remoteId);
+        return;
+    }
+    if (n.isDir)
+        for (const auto& c : n.children) CleanupRemoteMoved(driveId, c);
+}
+
 BOOL WINAPI CPluginFS::CopyOrMoveFromDiskToFS(BOOL copy, int mode, const char* fsName, HWND parent,
                                               const char* sourcePath, SalEnumSelection2 next,
                                               void* nextParam, int selectedFiles, int selectedDirs,
@@ -174,7 +480,20 @@ BOOL WINAPI CPluginFS::CopyOrMoveFromDiskToFS(BOOL copy, int mode, const char* f
     progressDlg->SetTotalItemsCount(totalCount);
     progressDlg->SetTotalBatchBytes(totalBytes);
 
-    int64_t batchUploadedBytes = 0;
+    UploadCtx ctx;
+    ctx.parent = parent;
+    ctx.driveId = driveId;
+    ctx.dlg = progressDlg;
+    ctx.totalBytes = totalBytes;
+
+    std::vector<SharePointApi::SharePointItem> siblings;
+    std::string listErr;
+    if (!SharePointApi::ApiClient::GetInstance().ListDriveChildren(driveId, folderItemId, siblings, &listErr))
+    {
+        progressDlg->Close();
+        ShowTransferError(parent, listErr);
+        return FALSE;
+    }
 
     while (next(parent, 0, &itemName, &isDir, &fileSize, &attr, &lastWriteTime, nextParam, &enumError) != NULL)
     {
@@ -186,57 +505,18 @@ BOOL WINAPI CPluginFS::CopyOrMoveFromDiskToFS(BOOL copy, int mode, const char* f
             break;
         }
 
-        std::wstring itemLocalPath = wSourcePath + SharePointHttp::HttpClient::AnsiToWide(itemName);
+        std::wstring wName = SharePointHttp::HttpClient::AnsiToWide(itemName);
+        ResultNode node;
+        UploadTree(ctx, wSourcePath + wName, SharePointHttp::HttpClient::WideToUtf8(wName), isDir != 0,
+                   folderItemId, siblings, node);
 
-        if (isDir)
-        {
-            std::string folderName = itemName;
-            SharePointApi::SharePointItem createdDir;
-            std::string err;
-            SharePointApi::ApiClient::GetInstance().CreateFolder(driveId, folderItemId, folderName, createdDir, &err);
-        }
-        else
-        {
-            std::string fileName = itemName;
-            progressDlg->SetCurrentFileName(fileName);
-
-            auto progCb = [&](int64_t bytesTransferred, int64_t totalFileBytes) -> bool {
-                progressDlg->UpdateFileProgress(bytesTransferred, totalFileBytes);
-                progressDlg->UpdateBatchProgress(batchUploadedBytes + bytesTransferred, totalBytes);
-                return !progressDlg->IsCancelled();
-            };
-
-            SharePointApi::SharePointItem uploadedItem;
-            std::string err;
-            bool ok = SharePointApi::ApiClient::GetInstance().UploadFile(driveId, folderItemId, itemLocalPath, fileName,
-                                                                         progCb, progressDlg->GetCancelFlagPtr(),
-                                                                         &uploadedItem, &err);
-            if (ok)
-            {
-                LARGE_INTEGER li;
-                HANDLE hF = CreateFileW(itemLocalPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-                if (hF != INVALID_HANDLE_VALUE)
-                {
-                    if (GetFileSizeEx(hF, &li)) batchUploadedBytes += li.QuadPart;
-                    CloseHandle(hF);
-                }
-                progressDlg->IncrementCompletedItems();
-
-                if (!copy)
-                {
-                    DeleteFileW(itemLocalPath.c_str());
-                }
-            }
-            else if (!progressDlg->IsCancelled())
-            {
-                SalamanderGeneral->SalMessageBox(parent, err.c_str(), LoadStr(IDS_PLUGINNAME), MB_OK | MB_ICONERROR);
-            }
-        }
+        if (!copy) CleanupLocalMoved(node);
+        if (ctx.cancelled) break;
     }
 
     progressDlg->Close();
 
-    if (progressDlg->IsCancelled())
+    if (ctx.cancelled || progressDlg->IsCancelled())
     {
         if (cancelOrHandlePath) *cancelOrHandlePath = TRUE;
         return TRUE;
@@ -363,58 +643,29 @@ BOOL WINAPI CPluginFS::CopyOrMoveFromFS(BOOL copy, int mode, const char* fsName,
     ResolveCurrentTarget(driveId, folderItemId, siteId);
     if (driveId.empty() && m_currentPath.rfind("\\OneDrive", 0) == 0) driveId = "me";
 
+    // Collect the selection (files and folders) first, so totals are exact.
+    struct TopEntry
+    {
+        DlNode tree;
+        std::string name;
+    };
+    std::vector<TopEntry> entries;
     BOOL focused = (selectedFiles == 0 && selectedDirs == 0);
     int index = 0;
     BOOL isDir = FALSE;
 
     int totalCount = 0;
     int64_t totalBytes = 0;
-    std::string firstFileName;
 
     while (true)
     {
         const CFileData* f = focused ? SalamanderGeneral->GetPanelFocusedItem(panel, &isDir)
                                      : SalamanderGeneral->GetPanelSelectedItem(panel, &index, &isDir);
         if (f == NULL) break;
-        if (!isDir && f->Name)
+        if (f->Name && strcmp(f->Name, "..") != 0)
         {
-            totalCount++;
-            totalBytes += (int64_t)f->Size.Value;
-            if (firstFileName.empty()) firstFileName = f->Name;
-        }
-        if (focused) break;
-    }
-
-    if (totalCount == 0)
-    {
-        return TRUE;
-    }
-
-    std::wstring wTargetDir, wSingleTargetFileName;
-    ParseLocalTarget(targetPath, totalCount, firstFileName, wTargetDir, wSingleTargetFileName);
-    EnsureLocalDirectoryExists(wTargetDir);
-
-    auto progressDlg = CDialogTransferProgress::Create(parent, true);
-    progressDlg->SetTotalItemsCount(totalCount);
-    progressDlg->SetTotalBatchBytes(totalBytes);
-
-    int64_t batchDownloadedBytes = 0;
-    ConflictState conflictState;
-    index = 0;
-
-    while (true)
-    {
-        const CFileData* f = focused ? SalamanderGeneral->GetPanelFocusedItem(panel, &isDir)
-                                     : SalamanderGeneral->GetPanelSelectedItem(panel, &index, &isDir);
-        if (f == NULL) break;
-
-        if (progressDlg->IsCancelled()) break;
-
-        if (!isDir && f->Name)
-        {
-            std::string fileName = f->Name;
             SharePointApi::SharePointItem item;
-            const auto* pItem = FindItemObjectByPanelName(f->Name, FALSE);
+            const auto* pItem = FindItemObjectByPanelName(f->Name, isDir);
             if (pItem)
             {
                 item = *pItem;
@@ -422,76 +673,88 @@ BOOL WINAPI CPluginFS::CopyOrMoveFromFS(BOOL copy, int mode, const char* fsName,
             }
             else
             {
-                item.id = FindItemByPanelName(f->Name, FALSE);
+                item.id = FindItemByPanelName(f->Name, isDir);
                 item.driveId = driveId;
-                item.name = fileName;
+                item.name = f->Name;
                 item.size = (int64_t)f->Size.Value;
             }
+            item.isFolder = (isDir != FALSE);
 
-            progressDlg->SetCurrentFileName(fileName);
-
-            std::wstring destFile = wTargetDir;
-            if (!destFile.empty() && destFile.back() != L'\\') destFile += L"\\";
-
-            if (totalCount == 1 && !wSingleTargetFileName.empty())
+            entries.emplace_back();
+            entries.back().name = f->Name;
+            std::string treeErr;
+            if (!BuildDlTree(item, entries.back().tree, totalCount, totalBytes, treeErr, 0))
             {
-                destFile += wSingleTargetFileName;
-            }
-            else
-            {
-                destFile += SharePointHttp::HttpClient::SanitizeFileNameForLocalFsW(SharePointHttp::HttpClient::Utf8ToWide(fileName));
-            }
-
-            if (GetFileAttributesW(destFile.c_str()) != INVALID_FILE_ATTRIBUTES)
-            {
-                ConflictChoice choice = AskConflict(parent, conflictState, fileName, false);
-                if (choice == ConflictChoice::Cancel)
-                {
-                    cancelOrHandlePath = TRUE;
-                    progressDlg->Close();
-                    return TRUE;
-                }
-                if (choice == ConflictChoice::Skip)
-                {
-                    if (focused) break;
-                    continue; // skipped: not counted as transferred, never deleted remotely
-                }
-            }
-
-            auto progCb = [&](int64_t bytesTransferred, int64_t totalFileBytes) -> bool {
-                progressDlg->UpdateFileProgress(bytesTransferred, totalFileBytes);
-                progressDlg->UpdateBatchProgress(batchDownloadedBytes + bytesTransferred, totalBytes);
-                return !progressDlg->IsCancelled();
-            };
-
-            std::string err;
-            bool ok = SharePointApi::ApiClient::GetInstance().DownloadFile(item, destFile, progCb,
-                                                                           progressDlg->GetCancelFlagPtr(), &err);
-            if (ok)
-            {
-                batchDownloadedBytes += item.size;
-                progressDlg->IncrementCompletedItems();
-
-                if (!copy)
-                {
-                    SharePointApi::ApiClient::GetInstance().DeleteItem(driveId, item.id);
-                }
-            }
-            else if (!progressDlg->IsCancelled())
-            {
-                progressDlg->Close();
-                SalamanderGeneral->SalMessageBox(parent, err.c_str(), LoadStr(IDS_PLUGINNAME), MB_OK | MB_ICONERROR);
+                ShowTransferError(parent, FormatFolderError(f->Name, treeErr));
                 cancelOrHandlePath = TRUE;
                 return TRUE;
             }
         }
-
         if (focused) break;
+    }
+
+    if (entries.empty())
+    {
+        return TRUE;
+    }
+
+    // A single explicit target file name applies only to exactly one selected file.
+    std::wstring wTargetDir, wSingleTargetFileName;
+    bool singleFile = (entries.size() == 1 && !entries[0].tree.item.isFolder);
+    ParseLocalTarget(targetPath, singleFile ? 1 : 2, singleFile ? entries[0].name : std::string(),
+                     wTargetDir, wSingleTargetFileName);
+    EnsureLocalDirectoryExists(wTargetDir);
+
+    auto progressDlg = CDialogTransferProgress::Create(parent, true);
+    progressDlg->SetTotalItemsCount(totalCount);
+    progressDlg->SetTotalBatchBytes(totalBytes);
+
+    DownloadCtx ctx;
+    ctx.parent = parent;
+    ctx.dlg = progressDlg;
+    ctx.totalBytes = totalBytes;
+
+    for (auto& e : entries)
+    {
+        if (progressDlg->IsCancelled()) break;
+
+        std::wstring destPath = wTargetDir;
+        if (!destPath.empty() && destPath.back() != L'\\') destPath += L"\\";
+        if (singleFile && !wSingleTargetFileName.empty())
+        {
+            destPath += wSingleTargetFileName;
+        }
+        else
+        {
+            std::wstring comp;
+            if (!SharePointTransfer::MakeSafeLocalComponent(SharePointHttp::HttpClient::Utf8ToWide(e.name), comp))
+            {
+                char buf[2 * MAX_PATH + 256];
+                std::string fmt = LoadStr(IDS_XFER_ERR_UNSAFE_NAME_FMT);
+                snprintf(buf, sizeof(buf), fmt.c_str(), e.name.c_str());
+                ShowTransferError(parent, buf);
+                continue; // skipped: never deleted remotely
+            }
+            destPath += comp;
+        }
+
+        ResultNode result;
+        DownloadTree(ctx, e.tree, destPath, result);
+
+        if (!copy) CleanupRemoteMoved(driveId, result);
+        if (ctx.cancelled || ctx.aborted) break;
+    }
+
+    if (ctx.aborted)
+    {
+        cancelOrHandlePath = TRUE;
+        SharePointCache::CacheManager::GetInstance().InvalidateAll();
+        return TRUE;
     }
 
     progressDlg->Close();
 
-    if (progressDlg->IsCancelled())
+    if (ctx.cancelled || progressDlg->IsCancelled())
     {
         cancelOrHandlePath = TRUE;
         return TRUE;
